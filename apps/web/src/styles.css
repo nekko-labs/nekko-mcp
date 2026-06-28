@@ -1,0 +1,26 @@
+:root {
+  --paper: #131210; --paper-2: #1c1a16; --card: #211f1a;
+  --ink: #f4f0e9; --ink-2: #bdb5a8; --ink-3: #8f877d;
+  --line: #302d27; --line-2: #3e3a33;
+  --accent: #ff7a59; --accent-soft: color-mix(in srgb, var(--accent) 22%, var(--card));
+  --success: #45b483; --info: #6f9cf0; --danger: #f06a52; --warning: #f0a94c;
+}
+* { box-sizing: border-box; }
+body { margin: 0; font-family: Inter, system-ui, sans-serif; background: var(--paper); color: var(--ink); }
+a { color: var(--accent); }
+.wrap { max-width: 960px; margin: 0 auto; padding: 28px 20px 80px; }
+.row { display: flex; align-items: center; gap: 10px; }
+.between { justify-content: space-between; }
+.muted { color: var(--ink-3); }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 16px; }
+.btn { border: 1px solid var(--line-2); background: var(--paper-2); color: var(--ink-2); border-radius: 10px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
+.btn:hover { color: var(--ink); border-color: var(--ink-3); }
+.btn-accent { background: var(--accent); color: #16140f; border-color: var(--accent); font-weight: 600; }
+.btn-danger:hover { color: var(--danger); border-color: var(--danger); }
+.dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.chip { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--paper-2); color: var(--ink-2); }
+input, select { background: var(--paper-2); border: 1px solid var(--line); color: var(--ink); border-radius: 10px; padding: 7px 10px; font-size: 13px; }
+pre.logs { background: #0c0b09; color: #c8d1cc; border-radius: 10px; padding: 10px; font-size: 12px; max-height: 200px; overflow: auto; margin: 8px 0 0; white-space: pre-wrap; }
+h1 { font-size: 26px; margin: 0; letter-spacing: -0.5px; }
+.grad { background: linear-gradient(135deg, var(--accent), #9b6dff); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.code { font-family: ui-monospace, monospace; background: var(--paper-2); padding: 2px 6px; border-radius: 6px; font-size: 12px; }

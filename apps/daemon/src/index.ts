@@ -1,4 +1,4 @@
-import { createServer, type ServerResponse } from 'node:http';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -55,6 +55,15 @@ if (process.argv.includes('--stdio')) {
     res.writeHead(status, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
     res.end(JSON.stringify(body));
   };
+  const readBody = (req: IncomingMessage): Promise<string> =>
+    new Promise((resolve) => {
+      let data = '';
+      req.on('data', (c) => {
+        data += c;
+        if (data.length > 1_000_000) req.destroy();
+      });
+      req.on('end', () => resolve(data));
+    });
   const gatewayInfo = (): GatewayInfo => ({
     url: `http://localhost:${PORT}/mcp`,
     stdioCommand: 'nekko-mcpd --stdio',
@@ -73,11 +82,42 @@ if (process.argv.includes('--stdio')) {
     if (pathname === '/api/gateway') return json(res, 200, gatewayInfo());
     if (pathname === '/api/servers' && req.method === 'GET') return json(res, 200, supervisor.list());
 
+    // add a server (custom config, or a registry entry merged with overrides)
+    if (pathname === '/api/servers' && req.method === 'POST') {
+      try {
+        const cfg = JSON.parse(await readBody(req)) as ManagedServerConfig;
+        if (!cfg.id || !cfg.name || !cfg.command) return json(res, 400, { error: 'id, name, command required' });
+        if (servers.some((s) => s.id === cfg.id)) return json(res, 409, { error: 'id_exists' });
+        cfg.runtime = cfg.runtime === 'docker' ? 'docker' : 'process';
+        cfg.enabled = cfg.enabled ?? true;
+        servers.push(cfg);
+        saveConfig(servers);
+        if (cfg.enabled) await supervisor.start(cfg);
+        return json(res, 200, supervisor.status(cfg.id) ?? { id: cfg.id, state: 'stopped' });
+      } catch {
+        return json(res, 400, { error: 'invalid_json' });
+      }
+    }
+
+    const logsM = /^\/api\/servers\/([^/]+)\/logs$/.exec(pathname);
+    if (logsM && req.method === 'GET') return json(res, 200, { logs: supervisor.logs(logsM[1]) });
+
+    const rmM = /^\/api\/servers\/([^/]+)$/.exec(pathname);
+    if (rmM && req.method === 'DELETE') {
+      const id = rmM[1];
+      await supervisor.stop(id);
+      servers = servers.filter((s) => s.id !== id);
+      saveConfig(servers);
+      return json(res, 200, { ok: true });
+    }
+
     const m = /^\/api\/servers\/([^/]+)\/(start|stop|restart)$/.exec(pathname);
     if (m && req.method === 'POST') {
       const [, id, action] = m;
       const cfg = servers.find((s) => s.id === id);
       if (!cfg) return json(res, 404, { error: 'not_found' });
+      cfg.enabled = action !== 'stop';
+      saveConfig(servers);
       if (action === 'stop') await supervisor.stop(id);
       else if (action === 'restart') await supervisor.restart(cfg);
       else await supervisor.start(cfg);
@@ -87,7 +127,3 @@ if (process.argv.includes('--stdio')) {
   });
   server.listen(PORT, '127.0.0.1', () => process.stdout.write(`nekko-mcpd HTTP API on http://localhost:${PORT}\n`));
 }
-
-// keep `servers`/`saveConfig` reachable for the (forthcoming) add/remove routes
-void saveConfig;
-void servers;

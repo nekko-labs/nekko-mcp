@@ -7,12 +7,15 @@
   "type": "module",
   "workspaces": [
     "packages/*",
-    "apps/daemon"
+    "apps/daemon",
+    "apps/web"
   ],
   "scripts": {
-    "build": "npm run build -w @nekko-mcp/shared && npm run build -w @nekko-mcp/core && npm run build -w @nekko-mcp/daemon",
+    "build": "npm run build -w @nekko-mcp/shared && npm run build -w @nekko-mcp/core && npm run build -w @nekko-mcp/daemon && npm run build -w @nekko-mcp/web",
     "test": "npm run test -w @nekko-mcp/core",
-    "probe": "node scripts/gateway-probe.mjs",
+    "dev": "node scripts/dev-all.mjs",
+    "dev:daemon": "npm run dev -w @nekko-mcp/daemon",
+    "dev:web": "npm run dev -w @nekko-mcp/web",
     "daemon": "node --experimental-strip-types apps/daemon/src/index.ts",
     "typecheck": "tsc -b --noEmit || true"
   },
