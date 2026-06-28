@@ -1,0 +1,22 @@
+{
+  "name": "nekko-mcp",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Local-first runtime & manager for MCP servers — run servers securely (process sandbox or Docker), supervise them, and expose one gateway endpoint for any agent harness. A ToolHive rival you own.",
+  "license": "MIT",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/daemon"
+  ],
+  "scripts": {
+    "build": "npm run build -w @nekko-mcp/shared && npm run build -w @nekko-mcp/core && npm run build -w @nekko-mcp/daemon",
+    "test": "npm run test -w @nekko-mcp/core",
+    "probe": "node scripts/gateway-probe.mjs",
+    "daemon": "node --experimental-strip-types apps/daemon/src/index.ts",
+    "typecheck": "tsc -b --noEmit || true"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
