@@ -1,5 +1,7 @@
 # NekkoMCP
 
+![NekkoMCP — run MCP servers securely; one gateway for every agent](docs/splash.png)
+
 **Local-first runtime & manager for MCP servers — a [ToolHive](https://github.com/stacklok/toolhive) rival you own.** Run MCP servers securely, supervise them, and expose **one gateway endpoint** any agent harness (Claude Code, Cursor, [Open Paw](https://github.com/nekko-labs/open-paw), Codex) can use. Not just a connector list — a proper server runtime.
 
 > Open source · MIT · [nekko-labs](https://github.com/nekko-labs). Standalone app **and** an embeddable tab in Open Paw.
