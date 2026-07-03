@@ -22,8 +22,8 @@ It is **not just a connector list** — it is a proper MCP *server runtime*: it 
 | **MetaMCP / MCPHub** | A real supervisor with isolation + secrets + health, not just a proxy; first-class agent-harness integration; a polished UI. |
 
 **Two faces, one engine:**
-1. **Standalone app** — its own UI (web now, Electron later) to add, configure, run, and monitor MCP servers; rivals ToolHive's portal.
-2. **Baked-in Open Paw tab** — the same UI shipped as `@nekko-mcp/ui` and embedded as an MCP-management pane inside Open Paw (which is already an MCP *client*; NekkoMCP is the *server runtime* it manages).
+1. **Standalone app** — its own UI (served by the daemon; Electron later) to add, configure, run, and monitor MCP servers; rivals ToolHive's portal.
+2. **First-class Open Paw integration** — Open Paw (already an MCP *client*) auto-detects the daemon, connects the gateway in one click, and opens this manager in a workbench pane. (Shipped natively in the open-paw repo against the daemon API; the `@nekko-mcp/ui` embeddable-package idea is parked unless a deeper embed is wanted.)
 
 **The three feelings we sell:**
 1. **Secure by choice** — pick your isolation at setup (containers *or* sandboxed processes); we make the tradeoff explicit, never force Docker.
@@ -55,42 +55,49 @@ Journeys: add a server (from catalog or custom command/image) → choose runtime
 
 ## 3. Feature Set
 
-### 3.1 Server runtime & supervisor `[planned → MVP]`
+### 3.1 Server runtime & supervisor `[shipped]`
 | Feature | Description | Status | Release |
 | --- | --- | --- | --- |
-| Process runtime | Spawn a stdio MCP server as a sandboxed child (allow-listed env, injected secrets, restricted CWD, resource limits); capture logs; health/restart | planned | v0.1.0 |
-| Docker runtime | Container-per-server (opt-in): pull/run image, env/secrets, caps/network/limits | planned | v0.2.0 |
-| Supervisor | Start/stop/restart, status (starting/ready/errored/stopped), crash backoff, structured logs ring-buffer | planned | v0.1.0 |
-| Secrets | Per-server secrets stored locally (OS keychain when available), injected at launch, never logged | planned | v0.2.0 |
+| Process runtime | Spawn a stdio MCP server as a sandboxed child (allow-listed env, injected secrets, restricted CWD, resource limits); capture logs; health/restart | shipped | v0.1.0 |
+| Docker runtime | Container-per-server (opt-in): pull/run image, env/secrets, caps/network/limits | shipped | v0.1.0 |
+| Supervisor | Start/stop/restart/remove, status (starting/ready/errored/stopped), structured logs ring-buffer | shipped | v0.1.0 |
+| Crash backoff | Auto-restart with backoff when a running server dies | planned | v0.3.0 |
+| Secrets | Per-server secrets stored locally (OS keychain when available), injected at launch, never logged | planned (file-based today, never logged/returned) | v0.3.0 |
 
-### 3.2 Gateway `[planned → MVP]`
+### 3.2 Gateway `[shipped]`
 | Feature | Description | Status | Release |
 | --- | --- | --- | --- |
-| Aggregating MCP gateway | One MCP endpoint that fans out to all running servers; tools/resources/prompts namespaced per server; routes calls to the owning server | planned | v0.1.0 |
-| Transports | stdio (for direct client spawn) + streamable HTTP/SSE (for URL-based clients) | planned | v0.1.0 |
-| Per-client tokens | Bearer-token auth on the HTTP gateway; per-client allow-list of which servers/tools are exposed | planned | v0.2.0 |
+| Aggregating MCP gateway | One MCP endpoint that fans out to all running servers; tools namespaced `server__tool`; routes calls to the owning server | shipped | v0.1.0 |
+| stdio transport | `nekko-mcpd --stdio` for direct client spawn | shipped | v0.1.0 |
+| Streamable HTTP transport | `/mcp` on the daemon port (stateless, JSON responses); proven by an HTTP smoke test and the live Open Paw client | shipped | v0.2.0 |
+| Gateway bearer token | Auto-generated, persisted, enforced on `/mcp` (401 otherwise), surfaced in the UI + `/api/gateway` | shipped | v0.2.0 |
+| Per-client tokens + allow-list | Token per client with an allow-list of which servers/tools each client sees | planned | v0.3.0 |
+| Resources & prompts aggregation | Aggregate `resources`/`prompts` alongside tools | planned | v0.3.0 |
 
-### 3.3 Registry / catalog `[planned]`
+### 3.3 Registry / catalog `[shipped]`
 | Feature | Description | Status | Release |
 | --- | --- | --- | --- |
-| Curated catalog | Built-in list of popular MCP servers (filesystem, github, postgres, fetch, **nekko-vault-mcp**, …) with one-click add | planned | v0.1.0 |
-| Custom server | Add by command+args+env (process) or image (docker) | planned | v0.1.0 |
+| Curated catalog | Built-in list of popular MCP servers (filesystem, github, postgres, fetch, **nekko-vault-mcp**, …) with one-click add | shipped | v0.1.0 |
+| Custom server | Add by command+args+env (process) or image (docker) | shipped | v0.1.0 |
+| Registry sync | Search/sync the official MCP registry (beyond the curated snapshot) | planned | later |
 
-### 3.4 UI `[planned]`
+### 3.4 UI `[shipped]`
 | Feature | Description | Status | Release |
 | --- | --- | --- | --- |
-| Web UI | Server list with status, add-from-catalog/custom, start/stop, logs viewer, tools inspector, copy gateway URL + per-client config snippets | planned | v0.1.0 |
-| Shared `@nekko-mcp/ui` | The same UI as a package Open Paw embeds as an "MCP" pane | planned | v0.2.0 |
+| Web UI | Server list with status, add-from-catalog/custom, start/stop, logs viewer, tools inspector, copy gateway URL + per-client config snippets | shipped | v0.1.0 |
+| Served by the daemon | The built UI is served at the daemon root, one port does UI + API + gateway | shipped | v0.2.0 |
+| Fresh design | Violet→cyan Nekko brand (matches Open Paw's palette era), hero gateway card with endpoint + masked token + snippet tabs (Claude Code / .mcp.json / stdio / Open Paw), status pills, catalog grid, light+dark | shipped | v0.2.0 |
 | Electron shell | Standalone desktop app wrapping the daemon + UI | planned | later |
 
-### 3.5 Integrations `[planned]`
+### 3.5 Integrations `[shipped]`
 | Feature | Description | Status | Release |
 | --- | --- | --- | --- |
-| Open Paw tab | `@nekko-mcp/ui` embedded as a pane; talks to the local daemon | planned | v0.2.0 |
-| Client config export | Generate the `.mcp.json` / client snippet pointing at the gateway | planned | v0.1.0 |
+| Open Paw integration | Open Paw detects a running daemon (host-side probe), offers one-click **Connect gateway** (adds the HTTP gateway as an MCP server) and **Open manager** (this UI in a workbench browser pane). Implemented natively in the open-paw repo against the daemon API, instead of embedding `@nekko-mcp/ui` | shipped | v0.2.0 |
+| Client config export | `.mcp.json` / client snippets for HTTP + stdio, via `/api/gateway` + the UI snippet tabs | shipped | v0.1.0 |
+| Shared `@nekko-mcp/ui` package | The UI as an embeddable package (superseded for now by the native Open Paw integration; revisit if a deeper embed is wanted) | parked | later |
 
 ## 4. Design System & Considerations
-Reuse the Nekko design language (warm-neutral ink/paper ramp, salmon→coral accent, calm/minimal, dark+light, the 8-bit Nekko cat). The UI must read as a sibling of Open Paw and Nekko Notes. Status colors: ready=success, starting=info, errored=danger, stopped=ink-3. Logs are monospace with a sheen-free, fast virtualized view.
+Nekko design language, current era: cool ink/paper neutrals, **indigo-violet `#6d5efc` accent + cyan `#22d3ee` secondary** into a violet→cyan brand gradient (matching Open Paw's palette refresh), calm/minimal, dark+light via `prefers-color-scheme`, the paw/cat mark. The UI must read as a sibling of Open Paw and Nekko Notes. Status pills: ready=success, starting=warning, errored=danger, stopped=muted. Logs are monospace, capped ring-buffer.
 
 ## 5. Technical Architecture & Decisions (with the *why*)
 See [`TASKS.md`](TASKS.md). Key decisions: TypeScript + npm workspaces (match the org stack so the UI can be shared with Open Paw); a long-running **daemon** (`nekko-mcpd`) as the runtime + management API + gateway; a **RuntimeAdapter** interface with `ProcessRuntime` (default) and `DockerRuntime` (opt-in) so isolation is pluggable + user-selectable; the gateway built on `@modelcontextprotocol/sdk` (client per managed server ↔ one aggregated server). Local-first, no account.

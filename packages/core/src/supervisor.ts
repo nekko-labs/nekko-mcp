@@ -115,6 +115,12 @@ export class Supervisor {
     if (inst.state !== 'errored') inst.state = 'stopped';
   }
 
+  /** Stop a server and drop it from the roster entirely (config was deleted). */
+  async remove(id: string): Promise<void> {
+    await this.stop(id);
+    this.instances.delete(id);
+  }
+
   async restart(config: ManagedServerConfig): Promise<ServerStatus> {
     await this.stop(config.id);
     const inst = this.instances.get(config.id);

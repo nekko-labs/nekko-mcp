@@ -79,6 +79,10 @@ export interface GatewayInfo {
   stdioCommand: string;
   /** Bearer token for the HTTP endpoint (when auth is on). */
   token?: string;
-  /** A ready-to-paste `.mcp.json` snippet for the gateway. */
+  /** A ready-to-paste `.mcp.json` snippet for the gateway (HTTP transport). */
   clientSnippet: Record<string, unknown>;
+  /** A ready-to-paste `.mcp.json` snippet for the stdio gateway. */
+  stdioSnippet?: Record<string, unknown>;
+  /** The daemon's own web UI, served at the daemon root. */
+  uiUrl?: string;
 }

@@ -49,9 +49,10 @@ nekko-mcp/                         GitHub: nekko-labs/nekko-mcp (public, MIT)
 
 ## 3. Architecture
 
-- **Daemon (`nekko-mcpd`)** holds the `Supervisor` (a map of `ManagedServer` → running instance via a `RuntimeAdapter`). It exposes:
-  - **Management API** (HTTP, localhost): `GET /api/servers`, `POST /api/servers` (add), `POST /api/servers/:id/start|stop|restart`, `GET /api/servers/:id/logs`, `GET /api/registry`, `GET /api/gateway` (URL + token + client snippets).
-  - **Gateway**: an aggregating MCP server. For each running managed server it holds an MCP **client**; it merges their `tools`/`resources`/`prompts` (namespaced `server__tool`) and routes calls to the owner. Exposed over **stdio** (clients can spawn `nekko-mcp gateway`) and **streamable HTTP/SSE** (URL-based clients, bearer token).
+- **Daemon (`nekko-mcpd`)** holds the `Supervisor` (a map of `ManagedServer` → running instance via a `RuntimeAdapter`). One localhost port (7777) exposes:
+  - **Management API** (HTTP, localhost): `GET /api/servers`, `POST /api/servers` (add), `POST /api/servers/:id/start|stop|restart`, `DELETE /api/servers/:id`, `GET /api/servers/:id/logs`, `GET /api/registry`, `GET /api/gateway` (URL + token + HTTP/stdio client snippets + uiUrl).
+  - **Gateway**: an aggregating MCP server. For each running managed server it holds an MCP **client**; it merges their `tools` (namespaced `server__tool`; resources/prompts planned) and routes calls to the owner. Exposed over **stdio** (`nekko-mcpd --stdio`) and **streamable HTTP** at `/mcp`: stateless `StreamableHTTPServerTransport` (`sessionIdGenerator: undefined`, `enableJsonResponse: true`, a fresh transport+gateway per POST) so hand-rolled clients can speak plain JSON POSTs; bearer-token auth (token generated once into `~/.nekko-mcp/gateway-token`, checked with `timingSafeEqual`; `NEKKO_MCP_NO_AUTH=1` escape hatch).
+  - **Web UI**: the built `apps/web` served at `/` (path-sanitized static handler, SPA fallback), so one URL does UI + API + gateway.
 - **RuntimeAdapter** interface: `start(server): Promise<RunningServer>`, `stop`, `logs`, `health`. `ProcessRuntime` spawns a child (allow-listed env, injected secrets, restricted CWD, resource limits, no shell). `DockerRuntime` runs a container (image, caps, network, limits). Chosen by `server.runtime` (default from setup).
 - **UI** (`@nekko-mcp/ui`) is transport-light: it calls the daemon's HTTP API. The standalone `apps/web` and the Open Paw tab both render it; only the base URL differs.
 
@@ -62,36 +63,7 @@ nekko-mcp/                         GitHub: nekko-labs/nekko-mcp (public, MIT)
 
 ## 5. Execution Plan (backlog)
 
-Status `[ ]` open · `[~]` partial · `[x]` done.
-
-### Epic 0 — Scaffold
-- [ ] Repo skeleton: workspaces, tsconfig.base, lint/build scripts, `.mcp.json`-style examples.
-- [ ] `packages/shared`: core types + daemon API contract.
-- [ ] Cross-project: rename Nekko Notes CLI bin `nekko-mcp` → `nekko-vault-mcp` (frees the name; it's a catalog entry here).
-
-### Epic 1 — Runtime & supervisor (v0.1.0)
-- [ ] `RuntimeAdapter` interface + `ProcessRuntime` (sandboxed child: env allow-list, secrets, CWD, rlimits, no shell) + log ring-buffer.
-- [ ] `Supervisor`: start/stop/restart/status, crash backoff. Unit tests against an in-repo echo MCP server.
-- [ ] `DockerRuntime` (opt-in): container-per-server.
-
-### Epic 2 — Gateway (v0.1.0)
-- [ ] Aggregating MCP gateway: client-per-server, namespaced tool/resource merge, call routing.
-- [ ] Transports: stdio + streamable HTTP/SSE. Smoke probe: run echo server through the gateway, list+call a tool.
-- [ ] Per-client bearer token + server/tool allow-list (v0.2.0).
-
-### Epic 3 — Registry & API (v0.1.0)
-- [ ] Curated catalog (filesystem, github, fetch, postgres, nekko-vault-mcp, …) + custom (command/image).
-- [ ] Daemon HTTP management API + client-config export (`.mcp.json` snippet for the gateway).
-
-### Epic 4 — UI (v0.1.0 → v0.2.0)
-- [ ] `apps/web` standalone UI: server list/status, add, start/stop, logs, tools inspector, copy gateway URL.
-- [ ] Extract `@nekko-mcp/ui` shared package.
-
-### Epic 5 — Open Paw embed (v0.2.0)
-- [ ] Add an `mcp` pane kind in Open Paw rendering `@nekko-mcp/ui` against the local daemon.
-
-### Epic 6 — Distribution (later)
-- [ ] Electron desktop shell; docker-compose for self-host; signed releases; GitHub Actions (paused like Notes until launch).
+The epic-by-epic backlog lives in **Part 2 below** (single source of truth for task status; this section used to mirror it and drifted). Epics: 0 Scaffold · 1 Runtime & supervisor · 2 Gateway · 3 Registry & API · 4 UI · 5 Open Paw integration · 6 Distribution.
 
 ## 6. How We Work
 Same as the org: spec is the product source of truth, plan is broken-down-first, build+verify+push to main, local-first + explicit-tradeoff invariants.
@@ -109,27 +81,39 @@ Mirror of Part 1 §5. `[x]` = shipped per the prior plan · `[ ]` = open.
 - [x] **Cross-project rename** — Nekko Notes CLI bin `nekko-mcp` → `nekko-vault-mcp`.
 
 ## Epic 1 — Runtime & supervisor (v0.1.0)
-- [x] **`RuntimeAdapter` + `ProcessRuntime`** — sandboxed child, allow-listed env, log buffer. · [spec](SPEC.md#31-server-runtime--supervisor-planned--mvp)
-- [x] **`Supervisor`** — start/stop/restart/status, logs; e2e test vs an in-repo echo MCP server. · [spec](SPEC.md#31-server-runtime--supervisor-planned--mvp)
-- [x] **`DockerRuntime` (opt-in)** — + unit tests (spec only; needs Docker to run live). · [spec](SPEC.md#31-server-runtime--supervisor-planned--mvp)
-- [ ] **Crash backoff / auto-restart loop; secrets in OS keychain** · [spec](SPEC.md#31-server-runtime--supervisor-planned--mvp) · Added: 2026-06-29
+- [x] **`RuntimeAdapter` + `ProcessRuntime`** — sandboxed child, allow-listed env, log buffer. · [spec](SPEC.md#31-server-runtime--supervisor-shipped)
+- [x] **`Supervisor`** — start/stop/restart/status, logs; e2e test vs an in-repo echo MCP server. · [spec](SPEC.md#31-server-runtime--supervisor-shipped)
+- [x] **`DockerRuntime` (opt-in)** — + unit tests (spec only; needs Docker to run live). · [spec](SPEC.md#31-server-runtime--supervisor-shipped)
+- [x] **`Supervisor.remove(id)`** — DELETE now drops the instance from the roster entirely (was leaving a ghost `stopped` entry in `list()` and the health count). · Done: 2026-07-04
+- [ ] **Crash backoff / auto-restart loop** — auto-restart a `ready` server whose process dies, with capped backoff. · [spec](SPEC.md#31-server-runtime--supervisor-shipped) · Added: 2026-06-29
+- [ ] **Secrets in the OS keychain** — keytar-free (Credential Manager / Keychain / libsecret via CLI), file fallback. · [spec](SPEC.md#31-server-runtime--supervisor-shipped) · Added: 2026-06-29
+- [ ] **Periodic health checks** — ping each ready server's client on an interval; flip to `errored` + surface in the UI when unresponsive. · Added: 2026-07-04
 
-## Epic 2 — Gateway (v0.1.0)
-- [x] **Aggregating MCP gateway** — client-per-server, namespaced `server__tool` merge, routing; proven end-to-end in tests. · [spec](SPEC.md#32-gateway-planned--mvp)
-- [x] **stdio transport** — `nekko-mcpd --stdio`. · [spec](SPEC.md#32-gateway-planned--mvp)
-- [ ] **Streamable HTTP/SSE transport** · [spec](SPEC.md#32-gateway-planned--mvp) · Added: 2026-06-29
-- [ ] **Per-client token + allow-list (v0.2.0)** · [spec](SPEC.md#32-gateway-planned--mvp) · Added: 2026-06-29
+## Epic 2 — Gateway (v0.1.0 → v0.2.0)
+- [x] **Aggregating MCP gateway** — client-per-server, namespaced `server__tool` merge, routing; proven end-to-end in tests. · [spec](SPEC.md#32-gateway-shipped)
+- [x] **stdio transport** — `nekko-mcpd --stdio`. · [spec](SPEC.md#32-gateway-shipped)
+- [x] **Streamable HTTP transport** — `/mcp` on the daemon port; stateless SDK transport with JSON responses (`enableJsonResponse`), fresh transport+gateway per request; `npm run smoke:http` boots the daemon and speaks raw MCP-over-fetch (initialize → tools/list → tools/call → 401 without token). · [spec](SPEC.md#32-gateway-shipped) · Done: 2026-07-04
+- [x] **Gateway bearer token** — generated once to `~/.nekko-mcp/gateway-token`, `timingSafeEqual` check, exposed via `/api/gateway` + the UI (masked, reveal/copy); `NEKKO_MCP_NO_AUTH=1` opt-out. · [spec](SPEC.md#32-gateway-shipped) · Done: 2026-07-04
+- [ ] **Per-client tokens + server/tool allow-list** — a token per client, each with an allow-list of exposed servers/tools; management API + UI. · [spec](SPEC.md#32-gateway-shipped) · Added: 2026-06-29
+- [ ] **Resources & prompts aggregation** — the gateway currently merges `tools` only; aggregate `resources` + `prompts` the same namespaced way. · Added: 2026-07-04
+- [ ] **Live tool-change notifications** — forward `notifications/tools/list_changed` when a managed server starts/stops so connected clients refresh without a manual reconnect. · Added: 2026-07-04
 
 ## Epic 3 — Registry & API (v0.1.0)
-- [x] **Curated catalog** — filesystem/github/fetch/postgres/nekko-vault + custom server config. · [spec](SPEC.md#33-registry--catalog-planned)
-- [x] **Daemon HTTP management API** — list/add/remove/start/stop/restart/logs/gateway + client-config export. · [spec](SPEC.md#32-gateway-planned--mvp)
+- [x] **Curated catalog** — filesystem/github/fetch/postgres/nekko-vault + custom server config. · [spec](SPEC.md#33-registry--catalog-shipped)
+- [x] **Daemon HTTP management API** — list/add/remove/start/stop/restart/logs/gateway + client-config export. · [spec](SPEC.md#32-gateway-shipped)
+- [ ] **Official MCP registry search/sync** — search the public registry from the Add flow, beyond the curated snapshot. · Added: 2026-07-04
+- [ ] **Import existing configs** — one-click import of `.mcp.json` / Claude Desktop / Cursor server configs into managed servers. · Added: 2026-07-04
 
 ## Epic 4 — UI
-- [x] **`apps/web` standalone UI** — list/status/add-from-catalog-or-custom/start-stop/restart/logs/tools/runtime-picker/gateway copy. · [spec](SPEC.md#34-ui-planned)
-- [ ] **Extract `@nekko-mcp/ui`** — shared package for the Open Paw tab. · [spec](SPEC.md#34-ui-planned) · Added: 2026-06-29
+- [x] **`apps/web` standalone UI** — list/status/add-from-catalog-or-custom/start-stop/restart/logs/tools/runtime-picker/gateway copy. · [spec](SPEC.md#34-ui-shipped)
+- [x] **Served by the daemon** — built UI served at `/` (path-sanitized static handler); one port for UI + API + gateway. · [spec](SPEC.md#34-ui-shipped) · Done: 2026-07-04
+- [x] **Fresh competitive design** — violet→cyan Nekko brand (Open Paw palette era): sticky header with daemon-status pill, hero + stat chips, gateway card (endpoint copy, masked token reveal/copy, snippet tabs for Claude Code / `.mcp.json` / stdio / Open Paw), server cards with status pills + expandable tool chips + logs, catalog grid with requires-chips + custom-server card, isolation segmented control in the add form, empty states, light+dark via `prefers-color-scheme`. Verified headless (screenshot). · [spec](SPEC.md#34-ui-shipped) · Done: 2026-07-04
+- [ ] **Live log streaming** — stream logs (SSE or poll-tail) instead of a snapshot on click. · Added: 2026-07-04
+- ~~**Extract `@nekko-mcp/ui`**~~ — parked: the Open Paw integration shipped natively against the daemon API (simpler than a cross-repo package); revisit only if a deeper embed is wanted. · Parked: 2026-07-04
 
-## Epic 5 — Open Paw embed (v0.2.0)
-- [ ] **`mcp` pane in Open Paw** — rendering `@nekko-mcp/ui`. · [spec](SPEC.md#35-integrations-planned) · Added: 2026-06-29
+## Epic 5 — Open Paw integration (v0.2.0)
+- [x] **Open Paw ↔ NekkoMCP** — shipped in the open-paw repo (branch `feat/nekko-mcp-integration`): the Open Paw MCP client gained a **streamable-HTTP transport** (`McpServerConfig.url` + `token`, JSON/SSE reply parsing, session-id echo), a host-side `detectNekkoMcp()` probe (`mcp:nekko` channel through the five-touch chain), and a Settings card that shows a detected daemon with one-click **Connect gateway** + **Open manager** (workbench browser pane). Proven by `scripts/itest-mcp-http.mjs` (Open Paw host → gateway → echo server round trip + 401 on a bad token). · [spec](SPEC.md#35-integrations-shipped) · Done: 2026-07-04
 
 ## Epic 6 — Distribution (later)
-- [ ] **Electron shell · docker-compose · signed releases · paused GitHub Actions** · [spec](SPEC.md#34-ui-planned) · Added: 2026-06-29
+- [ ] **npm publish `nekko-mcp` / `nekko-mcpd`** — so `npx nekko-mcp` starts the daemon (needs the user's npm login). · Added: 2026-07-04
+- [ ] **Electron shell · docker-compose · signed releases · GitHub Actions CI** (paused like Notes until launch). · [spec](SPEC.md#34-ui-shipped) · Added: 2026-06-29

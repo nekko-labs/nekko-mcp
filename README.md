@@ -23,30 +23,37 @@ The whole isolation model reduces to *"what command do we spawn over stdio"* —
 ```
 packages/shared   types + daemon API contract
 packages/core     RuntimeAdapter (Process | Docker) · Supervisor · aggregating Gateway · registry
-apps/daemon       nekko-mcpd: HTTP management API  +  `--stdio` aggregated MCP endpoint
+apps/daemon       nekko-mcpd: one localhost port serving the web UI, the management API,
+                  and the streamable-HTTP MCP gateway at /mcp (+ a `--stdio` mode)
+apps/web          the management UI (served by the daemon at /)
 ```
 
 - **Supervisor** launches each server through its `RuntimeAdapter`, connects an MCP client, tracks state/tools/logs (secrets never logged).
-- **Gateway** merges every ready server's tools (namespaced `server__tool`) into one MCP server and routes calls — exposed over stdio now (HTTP/SSE next).
+- **Gateway** merges every ready server's tools (namespaced `server__tool`) into one MCP server and routes calls. Exposed over **streamable HTTP** at `/mcp` (bearer-token auth, token auto-generated and shown in the UI) and over **stdio** (`nekko-mcpd --stdio`).
 
 ## Develop
 
 ```bash
 npm install
 npm run build
-npm test          # spawns a real stdio MCP server → aggregates it via the gateway → calls a tool
+npm test            # spawns a real stdio MCP server → aggregates it via the gateway → calls a tool
+npm run smoke:http  # boots the daemon → speaks MCP over plain HTTP → 401 without the token
 
-npm run daemon                       # HTTP management API on http://localhost:7777
+npm run daemon                           # UI + API + /mcp gateway on http://localhost:7777
 node apps/daemon/dist/index.js --stdio   # the aggregated gateway over stdio
 ```
 
-### Use it from Claude Code
+### Use it from your agent
 
-Point your client at the aggregated gateway — one endpoint for all your servers:
+One endpoint for all your servers. HTTP (recommended, the daemon keeps supervising):
 
-```json
-{ "mcpServers": { "nekko-mcp": { "command": "nekko-mcpd", "args": ["--stdio"] } } }
+```bash
+claude mcp add -t http nekko-mcp http://localhost:7777/mcp -H "Authorization: Bearer <token>"
 ```
 
+or stdio: `{ "mcpServers": { "nekko-mcp": { "command": "nekko-mcpd", "args": ["--stdio"] } } }`
+
+**Open Paw** auto-detects a running daemon: Settings → MCP servers → **Connect gateway** (one click), plus an **Open manager** button that opens this UI in a workbench pane.
+
 ## Status
-Kicked off 2026-06-28. **Vertical slice working**: process-runtime supervisor + aggregating gateway, proven end-to-end in tests; daemon HTTP API + curated catalog. Next: Docker runtime, the web UI, per-client tokens, and the Open Paw `mcp` tab (`@nekko-mcp/ui`). See the project's `spec.md`/`plan.md`.
+Kicked off 2026-06-28. **v0.2**: process + Docker runtimes, supervisor, aggregating gateway over stdio **and** streamable HTTP (bearer token), daemon-served web UI (fresh violet/cyan design), curated catalog, Open Paw one-click integration. Next: per-client allow-lists, resources/prompts aggregation, crash backoff, keychain secrets. See `SPEC.md`/`TASKS.md`.
