@@ -42,6 +42,16 @@ export interface SpawnSpec {
   cwd?: string;
 }
 
+/** A tool a server exposes, with the metadata the UI needs to detail it. */
+export interface ToolInfo {
+  /** Bare tool name (namespaced form is `${serverId}__${name}`). */
+  name: string;
+  /** Human description from the server's `tools/list`. */
+  description?: string;
+  /** JSON Schema for the tool's arguments (used to render its parameters). */
+  inputSchema?: unknown;
+}
+
 /** Runtime status the API/UI shows. Never includes secrets. */
 export interface ServerStatus {
   id: string;
@@ -50,6 +60,11 @@ export interface ServerStatus {
   state: ServerState;
   /** Tool names exposed by this server (namespaced form is `${id}__${tool}`). */
   tools: string[];
+  /**
+   * Full tool metadata (name + description + input schema) for the UI's tool
+   * inspector. Additive to `tools` (names) so existing consumers keep working.
+   */
+  toolDetails?: ToolInfo[];
   /** Last error message, if state === 'errored'. */
   error?: string;
   startedAt?: string;
@@ -69,6 +84,12 @@ export interface RegistryEntry {
   /** Names of env/secret keys the server needs (prompted on add). */
   requires?: string[];
   homepage?: string;
+  /** Where this entry came from: the built-in curated list or a live registry search. */
+  source?: 'curated' | 'registry';
+  /** A caveat to surface in the UI (e.g. a remote-only entry that can't run locally yet). */
+  note?: string;
+  /** True when the entry can't be launched as a local stdio child (remote-only). */
+  runnable?: boolean;
 }
 
 /**
@@ -148,6 +169,72 @@ export interface AnalyticsSummary {
   recent: UsageEvent[];
   /** Hourly call-volume buckets for the last 24h (oldest → newest). */
   series: { t: string; calls: number }[];
+}
+
+/**
+ * Serializable dump of the supervisor's analytics aggregates + event feed, so
+ * usage survives a daemon restart. The daemon persists this to
+ * `~/.nekko-mcp/analytics.json` and re-hydrates it on boot. Maps/Sets are
+ * flattened to arrays for JSON.
+ */
+export interface AnalyticsSnapshot {
+  /** When usage tracking first started (preserved across restarts). */
+  since: string;
+  totals: { calls: number; errors: number; bytesIn: number; bytesOut: number };
+  events: UsageEvent[];
+  servers: {
+    serverId: string;
+    name: string;
+    calls: number;
+    errors: number;
+    bytesIn: number;
+    bytesOut: number;
+    totalMs: number;
+    lastUsed?: string;
+    clients: string[];
+    tools: { tool: string; calls: number; errors: number; totalMs: number }[];
+  }[];
+  clients: { client: string; calls: number; errors: number; bytesIn: number; bytesOut: number; lastUsed: string }[];
+}
+
+/**
+ * A connected agent (MCP client) with its own gateway token and a per-server
+ * allow-list. The master gateway token (see GatewayInfo) always has full
+ * access; named agents are additional, scoped credentials so you can hand a
+ * client a token that only reaches the servers it needs.
+ */
+export interface AgentClient {
+  id: string;
+  name: string;
+  /** Bearer token this agent presents on the gateway. Localhost-only, like the master token. */
+  token: string;
+  /** Allowed servers: `'*'` = every server, or an allow-list of server ids. */
+  servers: '*' | string[];
+  createdAt: string;
+  /** Last time a call was attributed to this agent's token. */
+  lastUsed?: string;
+}
+
+/** Request body to create an agent. */
+export interface CreateAgentRequest {
+  name: string;
+  servers: '*' | string[];
+}
+
+/** Request body to update an agent (partial). */
+export interface UpdateAgentRequest {
+  name?: string;
+  servers?: '*' | string[];
+}
+
+/** An agent plus a ready-to-paste connect snippet (returned by the clients API). */
+export interface AgentClientInfo extends AgentClient {
+  /** The gateway URL this agent connects to. */
+  url: string;
+  /** A `claude mcp add` one-liner scoped to this agent's token. */
+  connectCommand: string;
+  /** A `.mcp.json` snippet using this agent's token. */
+  clientSnippet: Record<string, unknown>;
 }
 
 /** Daemon management API (HTTP, localhost) — request/response contracts. */

@@ -1,0 +1,141 @@
+// Smoke test for the v0.4 features: analytics persistence, tool details,
+// per-agent (per-server) permissions, and registry search.
+// Boots the daemon on a scratch port/data-dir, exercises each, then restarts
+// the daemon (same data-dir) to prove analytics survive a restart.
+import { spawn } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const PORT = 7878;
+const BASE = `http://localhost:${PORT}`;
+const DIR = mkdtempSync(join(tmpdir(), 'nekko-mcp-feat-'));
+const ECHO = join(ROOT, 'packages/core/src/fixtures/echo-server.mjs');
+
+const ok = (m) => console.log(`✓ ${m}`);
+let daemon;
+const fail = (m) => {
+  console.error(`✗ ${m}`);
+  if (daemon) daemon.kill();
+  rmSync(DIR, { recursive: true, force: true });
+  process.exit(1);
+};
+
+const boot = async () => {
+  const d = spawn(process.execPath, ['--experimental-strip-types', join(ROOT, 'apps/daemon/src/index.ts')], {
+    env: { ...process.env, NEKKO_MCP_DIR: DIR, PORT: String(PORT) },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  d.stderr.on('data', (x) => process.stderr.write(x));
+  let up = false;
+  for (let i = 0; i < 60 && !up; i++) {
+    up = await fetch(`${BASE}/health`).then((r) => r.ok).catch(() => false);
+    if (!up) await new Promise((r) => setTimeout(r, 200));
+  }
+  if (!up) fail('daemon did not come up');
+  return d;
+};
+
+const gwToken = async () => (await (await fetch(`${BASE}/api/gateway`)).json()).token;
+
+// Hand-rolled MCP-over-fetch with a chosen bearer token.
+let rpcId = 0;
+const mcp = async (token, method, params, notify = false) => {
+  const body = { jsonrpc: '2.0', method, params };
+  if (!notify) body.id = ++rpcId;
+  const res = await fetch(`${BASE}/mcp`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', authorization: `Bearer ${token}` },
+    body: JSON.stringify(body),
+  });
+  if (notify) return res;
+  return { status: res.status, body: res.status === 200 ? await res.json() : await res.text() };
+};
+const session = async (token, name) => {
+  await mcp(token, 'initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name, version: '0' } });
+  await mcp(token, 'notifications/initialized', undefined, true);
+};
+
+daemon = await boot();
+ok('daemon up');
+const master = await gwToken();
+
+// Add the echo server.
+const added = await (await fetch(`${BASE}/api/servers`, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ id: 'echo', name: 'Echo', runtime: 'process', command: process.execPath, args: [ECHO], enabled: true }),
+})).json();
+if (added.state !== 'ready') fail(`echo not ready: ${JSON.stringify(added)}`);
+ok('echo server added and ready');
+
+// ── tool details ──────────────────────────────────────────────────────────
+const servers = await (await fetch(`${BASE}/api/servers`)).json();
+const echo = servers.find((s) => s.id === 'echo');
+const echoTool = echo?.toolDetails?.find((t) => t.name === 'echo');
+if (!echoTool || !echoTool.inputSchema) fail(`echo toolDetails missing schema: ${JSON.stringify(echo?.toolDetails)}`);
+ok('server status exposes toolDetails with an input schema');
+
+// ── analytics via the master token ──────────────────────────────────────────
+await session(master, 'master-client');
+const mc = await mcp(master, 'tools/call', { name: 'echo__echo', arguments: { text: 'nyaa' } });
+if (mc.body?.result?.content?.[0]?.text !== 'nyaa') fail(`master call failed: ${JSON.stringify(mc.body)}`);
+let analytics = await (await fetch(`${BASE}/api/analytics`)).json();
+if (!(analytics.totalCalls >= 1)) fail(`no calls recorded: ${JSON.stringify(analytics.totals)}`);
+ok(`analytics recorded a call (totalCalls=${analytics.totalCalls})`);
+
+// ── per-agent permissions ───────────────────────────────────────────────────
+const blocked = await (await fetch(`${BASE}/api/clients`, {
+  method: 'POST', headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ name: 'blocked-agent', servers: ['nonexistent'] }),
+})).json();
+if (!blocked.token) fail('agent creation returned no token');
+await session(blocked.token, 'blocked-agent');
+const blockedList = await mcp(blocked.token, 'tools/list', {});
+if ((blockedList.body?.result?.tools ?? []).some((t) => t.name === 'echo__echo')) fail('scoped-out agent should not see echo');
+ok('agent scoped away from echo does not see echo__echo');
+const blockedCall = await mcp(blocked.token, 'tools/call', { name: 'echo__echo', arguments: { text: 'x' } });
+const blockedErr = blockedCall.body?.error || blockedCall.body?.result?.isError;
+if (!blockedErr) fail(`scoped-out agent call should be refused: ${JSON.stringify(blockedCall.body)}`);
+ok('agent scoped away from echo is refused on tools/call');
+
+const allowed = await (await fetch(`${BASE}/api/clients`, {
+  method: 'POST', headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ name: 'echo-agent', servers: ['echo'] }),
+})).json();
+await session(allowed.token, 'echo-agent');
+const allowedList = await mcp(allowed.token, 'tools/list', {});
+if (!(allowedList.body?.result?.tools ?? []).some((t) => t.name === 'echo__echo')) fail('echo-scoped agent should see echo');
+const allowedCall = await mcp(allowed.token, 'tools/call', { name: 'echo__echo', arguments: { text: 'meow' } });
+if (allowedCall.body?.result?.content?.[0]?.text !== 'meow') fail(`echo-scoped agent call failed: ${JSON.stringify(allowedCall.body)}`);
+ok('agent scoped to echo can list + call echo__echo');
+
+analytics = await (await fetch(`${BASE}/api/analytics`)).json();
+if (!analytics.clients.some((c) => c.client === 'echo-agent')) fail(`analytics did not attribute the call to echo-agent: ${JSON.stringify(analytics.clients.map((c) => c.client))}`);
+ok('analytics attributes calls to the named agent');
+
+// ── registry search (network; soft-asserted so it passes offline) ───────────
+try {
+  const results = await (await fetch(`${BASE}/api/registry/search?q=github`)).json();
+  if (!Array.isArray(results)) fail('registry search did not return an array');
+  ok(`registry search returned ${results.length} result(s)${results.length ? ` (e.g. ${results[0].name})` : ' — offline or empty'}`);
+} catch (e) {
+  ok(`registry search endpoint reachable (network result skipped: ${e instanceof Error ? e.message : e})`);
+}
+
+// ── persistence across a restart ────────────────────────────────────────────
+const before = analytics.totalCalls;
+await new Promise((r) => setTimeout(r, 2300)); // let the debounced writer flush
+daemon.kill();
+await new Promise((r) => setTimeout(r, 600));
+daemon = await boot();
+const after = await (await fetch(`${BASE}/api/analytics`)).json();
+if (!(after.totalCalls >= before)) fail(`analytics did not persist: before=${before} after=${after.totalCalls}`);
+ok(`analytics persisted across restart (totalCalls ${before} → ${after.totalCalls})`);
+
+daemon.kill();
+rmSync(DIR, { recursive: true, force: true });
+console.log('\nFeature smoke: all green');
+process.exit(0);

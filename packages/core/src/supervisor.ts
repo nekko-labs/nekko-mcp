@@ -1,12 +1,14 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import type {
+  AnalyticsSnapshot,
   AnalyticsSummary,
   ClientUsage,
   ManagedServerConfig,
   ServerState,
   ServerStatus,
   ServerUsage,
+  ToolInfo,
   UsageEvent,
 } from '@nekko-mcp/shared';
 import { runtimeFor } from './runtime.js';
@@ -44,7 +46,7 @@ interface Instance {
   client?: Client;
   transport?: StdioClientTransport;
   state: ServerState;
-  tools: string[];
+  tools: ToolInfo[];
   error?: string;
   startedAt?: string;
   restarts: number;
@@ -56,7 +58,8 @@ const toStatus = (i: Instance): ServerStatus => ({
   name: i.config.name,
   runtime: i.config.runtime,
   state: i.state,
-  tools: i.tools,
+  tools: i.tools.map((t) => t.name),
+  toolDetails: i.tools,
   error: i.error,
   startedAt: i.startedAt,
   restarts: i.restarts,
@@ -82,11 +85,18 @@ export class Supervisor {
   // ── usage analytics ────────────────────────────────────────────────────
   // Aggregates persist for the daemon's lifetime; the event feed is a capped
   // ring buffer (older calls roll off the feed but stay counted in aggregates).
+  // The daemon can persist/restore all of this via snapshot()/hydrate().
   private since = new Date().toISOString();
   private events: UsageEvent[] = [];
   private byServer = new Map<string, ServerAgg>();
   private byClient = new Map<string, ClientAgg>();
   private totals = { calls: 0, errors: 0, bytesIn: 0, bytesOut: 0 };
+  /** Called after every recorded call so the host can persist analytics. */
+  private onUsage?: () => void;
+
+  constructor(opts: { onUsage?: () => void } = {}) {
+    this.onUsage = opts.onUsage;
+  }
 
   list(): ServerStatus[] {
     return [...this.instances.values()].map(toStatus);
@@ -150,6 +160,69 @@ export class Supervisor {
     c.bytesOut += e.bytesOut;
     c.lastUsed = e.at;
     if (!e.ok) c.errors += 1;
+
+    this.onUsage?.();
+  }
+
+  /** Serialize analytics for persistence (Maps/Sets → arrays). */
+  snapshot(): AnalyticsSnapshot {
+    return {
+      since: this.since,
+      totals: { ...this.totals },
+      events: [...this.events],
+      servers: [...this.byServer.entries()].map(([serverId, s]) => ({
+        serverId,
+        name: s.name,
+        calls: s.calls,
+        errors: s.errors,
+        bytesIn: s.bytesIn,
+        bytesOut: s.bytesOut,
+        totalMs: s.totalMs,
+        lastUsed: s.lastUsed,
+        clients: [...s.clients],
+        tools: [...s.tools.entries()].map(([tool, t]) => ({ tool, calls: t.calls, errors: t.errors, totalMs: t.totalMs })),
+      })),
+      clients: [...this.byClient.entries()].map(([client, c]) => ({
+        client,
+        calls: c.calls,
+        errors: c.errors,
+        bytesIn: c.bytesIn,
+        bytesOut: c.bytesOut,
+        lastUsed: c.lastUsed,
+      })),
+    };
+  }
+
+  /** Restore analytics from a snapshot (on daemon boot). Tolerates partial data. */
+  hydrate(snap: Partial<AnalyticsSnapshot> | undefined | null): void {
+    if (!snap || typeof snap !== 'object') return;
+    if (snap.since) this.since = snap.since;
+    if (snap.totals)
+      this.totals = {
+        calls: snap.totals.calls ?? 0,
+        errors: snap.totals.errors ?? 0,
+        bytesIn: snap.totals.bytesIn ?? 0,
+        bytesOut: snap.totals.bytesOut ?? 0,
+      };
+    if (Array.isArray(snap.events)) this.events = snap.events.slice(-EVENT_CAP);
+    this.byServer = new Map();
+    for (const s of snap.servers ?? []) {
+      this.byServer.set(s.serverId, {
+        name: s.name,
+        calls: s.calls,
+        errors: s.errors,
+        bytesIn: s.bytesIn,
+        bytesOut: s.bytesOut,
+        totalMs: s.totalMs,
+        lastUsed: s.lastUsed,
+        clients: new Set(s.clients ?? []),
+        tools: new Map((s.tools ?? []).map((t) => [t.tool, { calls: t.calls, errors: t.errors, totalMs: t.totalMs }])),
+      });
+    }
+    this.byClient = new Map();
+    for (const c of snap.clients ?? []) {
+      this.byClient.set(c.client, { calls: c.calls, errors: c.errors, bytesIn: c.bytesIn, bytesOut: c.bytesOut, lastUsed: c.lastUsed });
+    }
   }
 
   /** Aggregated analytics for the daemon's `/api/analytics` endpoint + the UI. */
@@ -227,7 +300,7 @@ export class Supervisor {
       const { tools } = await client.listTools();
       inst.client = client;
       inst.transport = transport;
-      inst.tools = tools.map((t) => t.name);
+      inst.tools = tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema }));
       inst.state = 'ready';
       inst.startedAt = new Date().toISOString();
     } catch (e) {

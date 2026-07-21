@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import type {
   ServerStatus,
   RegistryEntry,
@@ -6,6 +6,8 @@ import type {
   ManagedServerConfig,
   RuntimeKind,
   AnalyticsSummary,
+  ToolInfo,
+  AgentClientInfo,
 } from '@nekko-mcp/shared';
 import { api } from './api';
 
@@ -47,15 +49,21 @@ export function App() {
   const [registry, setRegistry] = useState<RegistryEntry[]>([]);
   const [gateway, setGateway] = useState<GatewayInfo | null>(null);
   const [stats, setStats] = useState<AnalyticsSummary | null>(null);
+  const [agents, setAgents] = useState<AgentClientInfo[]>([]);
   const [offline, setOffline] = useState(false);
   const [adding, setAdding] = useState<RegistryEntry | 'custom' | null>(null);
   const [showCatalog, setShowCatalog] = useState(false);
 
+  const refreshAgents = useCallback(() => {
+    void api.clients().then(setAgents).catch(() => {});
+  }, []);
+
   const refresh = useCallback(async () => {
     try {
-      const [s, a] = await Promise.all([api.servers(), api.analytics().catch(() => null)]);
+      const [s, a, c] = await Promise.all([api.servers(), api.analytics().catch(() => null), api.clients().catch(() => null)]);
       setServers(s);
       if (a) setStats(a);
+      if (c) setAgents(c);
       setOffline(false);
     } catch {
       setOffline(true);
@@ -79,7 +87,7 @@ export function App() {
         <div className="topbar-in">
           <div className="logo-tile">🐾</div>
           <span className="wordmark">NekkoMCP</span>
-          <span className="chip">v0.3</span>
+          <span className="chip">v0.4</span>
           <nav className="nav">
             <button className={view === 'servers' ? 'active' : ''} onClick={() => setView('servers')}>Servers</button>
             <button className={view === 'analytics' ? 'active' : ''} onClick={() => setView('analytics')}>
@@ -142,40 +150,9 @@ export function App() {
               </div></div>
             ) : null}
 
-            {showCatalog && (
-              <>
-                <div className="section-title" style={{ marginTop: 22 }}>Add from catalog</div>
-                <div className="panel"><div className="list">
-                  {registry.map((e) => (
-                    <div key={e.id} className="list-row">
-                      <div className="row between wrap-gap">
-                        <div style={{ flex: 1, minWidth: 200 }}>
-                          <div className="row" style={{ gap: 8 }}>
-                            <span className="server-name">{e.name}</span>
-                            <span className="chip">{e.runtime === 'docker' ? '🐳 docker' : '⚡ process'}</span>
-                            {(e.requires ?? []).map((r) => <span key={r} className="chip mono">{r}</span>)}
-                          </div>
-                          <div className="small muted" style={{ marginTop: 3 }}>{e.description}</div>
-                        </div>
-                        <div className="row">
-                          {e.homepage && <a className="small muted" href={e.homepage} target="_blank" rel="noreferrer">docs</a>}
-                          <button className="btn" onClick={() => setAdding(e)}>+ Add</button>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                  <div className="list-row">
-                    <div className="row between wrap-gap">
-                      <div style={{ flex: 1, minWidth: 200 }}>
-                        <span className="server-name">Custom server</span>
-                        <div className="small muted" style={{ marginTop: 3 }}>Any stdio MCP server, by command (process sandbox) or image (Docker).</div>
-                      </div>
-                      <button className="btn btn-primary" onClick={() => setAdding('custom')}>+ Configure</button>
-                    </div>
-                  </div>
-                </div></div>
-              </>
-            )}
+            <ConnectedAgents agents={agents} servers={servers ?? []} onChange={refreshAgents} />
+
+            {showCatalog && <AddCatalog curated={registry} onPick={setAdding} />}
 
             {adding && (
               <AddServer
@@ -304,9 +281,66 @@ function ServerRow({ s, onChange }: { s: ServerStatus; onChange: () => void }) {
       </div>
       {s.error && <p className="small" style={{ color: 'var(--danger)', margin: '8px 0 0' }}>{s.error}</p>}
       {showTools && s.tools.length > 0 && (
-        <div className="tool-chips">{s.tools.map((t) => <span key={t} className="chip mono">{s.id}__{t}</span>)}</div>
+        <ToolList serverId={s.id} tools={s.toolDetails ?? s.tools.map((name) => ({ name }))} />
       )}
       {logs && <pre className="logs">{logs.join('\n') || '(no output yet)'}</pre>}
+    </div>
+  );
+}
+
+/** Clickable list of a server's tools; each row expands to its description + parameters. */
+function ToolList({ serverId, tools }: { serverId: string; tools: ToolInfo[] }) {
+  const [open, setOpen] = useState<string | null>(null);
+  return (
+    <div className="tool-list">
+      {tools.map((t) => {
+        const isOpen = open === t.name;
+        return (
+          <div key={t.name} className={`tool-item ${isOpen ? 'open' : ''}`}>
+            <button className="tool-head" onClick={() => setOpen(isOpen ? null : t.name)}>
+              <span className="tool-caret">{isOpen ? '▾' : '▸'}</span>
+              <span className="tool-name mono">{serverId}__{t.name}</span>
+              {t.description && <span className="tool-desc small muted">{t.description}</span>}
+            </button>
+            {isOpen && (
+              <div className="tool-detail">
+                {t.description && <p className="tool-detail-desc">{t.description}</p>}
+                <SchemaParams schema={t.inputSchema} />
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+interface JsonSchema {
+  type?: string;
+  properties?: Record<string, { type?: string; description?: string; enum?: unknown[] }>;
+  required?: string[];
+}
+/** Render an MCP tool's inputSchema as a compact parameter list. */
+function SchemaParams({ schema }: { schema: unknown }) {
+  const s = (schema && typeof schema === 'object' ? schema : {}) as JsonSchema;
+  const props = s.properties ?? {};
+  const names = Object.keys(props);
+  const required = new Set(s.required ?? []);
+  if (names.length === 0) return <div className="small muted tool-noparams">No parameters.</div>;
+  return (
+    <div className="params">
+      <div className="params-label small muted">Parameters</div>
+      {names.map((name) => {
+        const p = props[name] ?? {};
+        return (
+          <div key={name} className="param-row">
+            <span className="param-name mono">{name}</span>
+            {p.type && <span className="param-type chip mono">{p.type}</span>}
+            {required.has(name) && <span className="param-req">required</span>}
+            {p.description && <span className="param-desc small muted">{p.description}</span>}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -433,6 +467,7 @@ function AddServer({ entry, onClose, onAdded }: { entry: RegistryEntry | null; o
   const [name, setName] = useState(entry?.name ?? '');
   const [command, setCommand] = useState(entry?.command ?? '');
   const [args, setArgs] = useState((entry?.args ?? []).join(' '));
+  const [image, setImage] = useState(entry?.image ?? '');
   const [env, setEnv] = useState((entry?.requires ?? []).map((k) => `${k}=`).join('\n'));
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -453,7 +488,7 @@ function AddServer({ entry, onClose, onAdded }: { entry: RegistryEntry | null; o
       command,
       args: args.trim() ? args.trim().split(/\s+/) : [],
       env: Object.keys(envObj).length ? envObj : undefined,
-      image: entry?.image,
+      image: runtime === 'docker' ? image.trim() || entry?.image : undefined,
       enabled: true,
     };
     try {
@@ -486,10 +521,16 @@ function AddServer({ entry, onClose, onAdded }: { entry: RegistryEntry | null; o
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder={entry?.name ?? 'my-server'} />
         </label>
       </div>
+      {runtime === 'docker' && (
+        <label className="field" style={{ marginTop: 12 }}>
+          Image
+          <input className="mono" value={image} onChange={(e) => setImage(e.target.value)} placeholder="ghcr.io/org/mcp-server:latest" />
+        </label>
+      )}
       <div className="row" style={{ marginTop: 12, flexWrap: 'wrap', gap: 14 }}>
         <label className="field" style={{ minWidth: 140 }}>
-          Command
-          <input className="mono" value={command} onChange={(e) => setCommand(e.target.value)} placeholder="npx" />
+          {runtime === 'docker' ? 'Command (optional — image entrypoint if blank)' : 'Command'}
+          <input className="mono" value={command} onChange={(e) => setCommand(e.target.value)} placeholder={runtime === 'docker' ? '(entrypoint)' : 'npx'} />
         </label>
         <label className="field" style={{ flex: 1, minWidth: 220 }}>
           Arguments
@@ -502,7 +543,241 @@ function AddServer({ entry, onClose, onAdded }: { entry: RegistryEntry | null; o
       </label>
       <div className="row between" style={{ marginTop: 14 }}>
         <span className="small" style={{ color: 'var(--danger)' }}>{err}</span>
-        <button className="btn btn-primary" onClick={() => void submit()} disabled={!command || busy}>{busy ? 'Adding…' : 'Add & start'}</button>
+        <button className="btn btn-primary" onClick={() => void submit()} disabled={(runtime === 'docker' ? !image && !command : !command) || busy}>{busy ? 'Adding…' : 'Add & start'}</button>
+      </div>
+    </section>
+  );
+}
+
+/** One catalog row (curated or registry-search result) with an Add button. */
+function CatalogRow({ e, onPick }: { e: RegistryEntry; onPick: (e: RegistryEntry) => void }) {
+  const runnable = e.runnable !== false;
+  return (
+    <div className="list-row">
+      <div className="row between wrap-gap">
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <div className="row" style={{ gap: 8 }}>
+            <span className="server-name">{e.name}</span>
+            <span className="chip">{e.runtime === 'docker' ? '🐳 docker' : '⚡ process'}</span>
+            {e.source === 'registry' && <span className="chip chip-accent">registry</span>}
+            {(e.requires ?? []).map((r) => <span key={r} className="chip mono">{r}</span>)}
+          </div>
+          {e.description && <div className="small muted" style={{ marginTop: 3 }}>{e.description}</div>}
+          {e.note && <div className="small" style={{ marginTop: 3, color: 'var(--warning)' }}>{e.note}</div>}
+        </div>
+        <div className="row">
+          {e.homepage && <a className="small muted" href={e.homepage} target="_blank" rel="noreferrer">docs</a>}
+          <button className="btn" onClick={() => onPick(e)} disabled={!runnable} title={runnable ? '' : e.note ?? 'Not locally runnable'}>+ Add</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** The "+ Add server" area: search the official MCP registry, or pick from the curated list. */
+function AddCatalog({ curated, onPick }: { curated: RegistryEntry[]; onPick: (e: RegistryEntry | 'custom') => void }) {
+  const [q, setQ] = useState('');
+  const [results, setResults] = useState<RegistryEntry[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  const seq = useRef(0);
+
+  useEffect(() => {
+    const query = q.trim();
+    if (!query) {
+      setResults(null);
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    const mine = ++seq.current;
+    const t = setTimeout(() => {
+      void api
+        .searchRegistry(query)
+        .then((r) => { if (mine === seq.current) setResults(r); })
+        .catch(() => { if (mine === seq.current) setResults([]); })
+        .finally(() => { if (mine === seq.current) setSearching(false); });
+    }, 300);
+    return () => clearTimeout(t);
+  }, [q]);
+
+  const searchingLive = q.trim().length > 0;
+  return (
+    <>
+      <div className="section-title" style={{ marginTop: 22 }}>Add a server</div>
+      <div className="panel">
+        <div className="catalog-search">
+          <span className="cs-ic">🔎</span>
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search the official MCP registry (github, postgres, slack…)"
+          />
+          {searching && <span className="small muted">searching…</span>}
+          {q && <button className="btn sm btn-ghost" onClick={() => setQ('')}>Clear</button>}
+        </div>
+        <div className="list">
+          {searchingLive ? (
+            results && results.length > 0 ? (
+              results.map((e) => <CatalogRow key={e.id} e={e} onPick={onPick} />)
+            ) : !searching ? (
+              <div className="list-row small muted">No servers found in the registry for “{q.trim()}”.</div>
+            ) : (
+              <div className="list-row small muted">Searching the MCP registry…</div>
+            )
+          ) : (
+            <>
+              {curated.map((e) => <CatalogRow key={e.id} e={e} onPick={onPick} />)}
+              <div className="list-row">
+                <div className="row between wrap-gap">
+                  <div style={{ flex: 1, minWidth: 200 }}>
+                    <span className="server-name">Custom server</span>
+                    <div className="small muted" style={{ marginTop: 3 }}>Any stdio MCP server, by command (process sandbox) or image (Docker).</div>
+                  </div>
+                  <button className="btn btn-primary" onClick={() => onPick('custom')}>+ Configure</button>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
+/** "Connected agents": scoped gateway tokens, each with its per-server permissions listed underneath. */
+function ConnectedAgents({ agents, servers, onChange }: { agents: AgentClientInfo[]; servers: ServerStatus[]; onChange: () => void }) {
+  const [editing, setEditing] = useState<AgentClientInfo | 'new' | null>(null);
+  return (
+    <>
+      <div className="section-title" style={{ marginTop: 22 }}>
+        Connected agents
+        <span className="rt">
+          <button className="btn sm" onClick={() => setEditing(editing === 'new' ? null : 'new')}>
+            {editing === 'new' ? 'Close' : '+ Add agent'}
+          </button>
+        </span>
+      </div>
+      {agents.length === 0 && editing !== 'new' ? (
+        <div className="panel"><div className="list-row small muted">
+          No scoped agents yet. Add one to hand a specific client a token that only reaches the servers you allow — the master gateway token above always has full access.
+        </div></div>
+      ) : (
+        <div className="panel"><div className="list">
+          {agents.map((a) => <AgentRow key={a.id} agent={a} servers={servers} onEdit={() => setEditing(a)} onChange={onChange} />)}
+        </div></div>
+      )}
+      {editing && (
+        <AgentEditor
+          agent={editing === 'new' ? null : editing}
+          servers={servers}
+          onClose={() => setEditing(null)}
+          onSaved={() => { setEditing(null); onChange(); }}
+        />
+      )}
+    </>
+  );
+}
+
+function AgentRow({ agent, servers, onEdit, onChange }: { agent: AgentClientInfo; servers: ServerStatus[]; onEdit: () => void; onChange: () => void }) {
+  const [copied, copy] = useCopy();
+  const [show, setShow] = useState(false);
+  const nameFor = (id: string) => servers.find((s) => s.id === id)?.name ?? id;
+  const all = agent.servers === '*';
+  const ids = agent.servers === '*' ? [] : agent.servers;
+  return (
+    <div className="list-row">
+      <div className="list-head between">
+        <div className="row wrap-gap">
+          <span className="agent-dot" />
+          <span className="server-name">{agent.name}</span>
+          <span className="tok mono">{show ? agent.token.slice(0, 16) + '…' : '••••••'}</span>
+          <button className="btn sm btn-ghost" onClick={() => setShow(!show)}>{show ? 'Hide' : 'Show'}</button>
+          <button className="btn sm" onClick={() => copy(`tok-${agent.id}`, agent.token)}>{copied === `tok-${agent.id}` ? 'Copied!' : 'Copy token'}</button>
+          <button className="btn sm" onClick={() => copy(`cmd-${agent.id}`, agent.connectCommand)}>{copied === `cmd-${agent.id}` ? 'Copied!' : 'Copy connect'}</button>
+        </div>
+        <div className="row">
+          <span className="small muted">{agent.lastUsed ? `used ${fmtRel(agent.lastUsed)}` : 'never used'}</span>
+          <button className="btn sm" onClick={onEdit}>Edit</button>
+          <button className="btn sm btn-danger" onClick={() => { void api.removeClient(agent.id).then(onChange); }}>Remove</button>
+        </div>
+      </div>
+      <div className="perm-row">
+        <span className="small muted">can use</span>
+        {all ? (
+          <span className="chip chip-accent">all servers</span>
+        ) : ids.length === 0 ? (
+          <span className="chip" style={{ color: 'var(--danger)' }}>no servers (blocked)</span>
+        ) : (
+          ids.map((id) => <span key={id} className="chip">{nameFor(id)}</span>)
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AgentEditor({ agent, servers, onClose, onSaved }: { agent: AgentClientInfo | null; servers: ServerStatus[]; onClose: () => void; onSaved: () => void }) {
+  const [name, setName] = useState(agent?.name ?? '');
+  const [all, setAll] = useState(agent ? agent.servers === '*' : true);
+  const [sel, setSel] = useState<Set<string>>(new Set(agent && agent.servers !== '*' ? agent.servers : []));
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const toggle = (id: string) => {
+    setSel((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const submit = async () => {
+    if (!name.trim()) { setErr('Give the agent a name.'); return; }
+    setErr(null);
+    setBusy(true);
+    const scoped: '*' | string[] = all ? '*' : [...sel];
+    try {
+      if (agent) await api.updateClient(agent.id, { name: name.trim(), servers: scoped });
+      else await api.addClient(name.trim(), scoped);
+      onSaved();
+    } catch {
+      setErr('Could not save the agent, check the daemon logs.');
+    }
+    setBusy(false);
+  };
+
+  return (
+    <section className="panel" style={{ marginTop: 14, padding: 18 }}>
+      <div className="row between">
+        <b>{agent ? `Edit ${agent.name}` : 'Add a connected agent'}</b>
+        <button className="btn sm btn-ghost" onClick={onClose}>✕</button>
+      </div>
+      <label className="field" style={{ marginTop: 14, maxWidth: 320 }}>
+        Agent name
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. research-bot" />
+      </label>
+
+      <div className="field" style={{ marginTop: 14 }}>
+        Allowed servers
+        <label className="perm-check" style={{ marginTop: 6 }}>
+          <input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} />
+          <span><b>All servers</b> <span className="small muted">— including any added later</span></span>
+        </label>
+        {!all && (
+          <div className="perm-list">
+            {servers.length === 0 && <div className="small muted">No servers yet — add a server first, then scope this agent to it.</div>}
+            {servers.map((s) => (
+              <label key={s.id} className="perm-check">
+                <input type="checkbox" checked={sel.has(s.id)} onChange={() => toggle(s.id)} />
+                <span>{s.name} <span className="small muted mono">{s.id}</span></span>
+              </label>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="row between" style={{ marginTop: 14 }}>
+        <span className="small" style={{ color: 'var(--danger)' }}>{err}</span>
+        <button className="btn btn-primary" onClick={() => void submit()} disabled={busy}>{busy ? 'Saving…' : agent ? 'Save' : 'Create agent'}</button>
       </div>
     </section>
   );
