@@ -100,6 +100,7 @@ Mirror of Part 1 §5. `[x]` = shipped per the prior plan · `[ ]` = open.
 
 ## Epic 3 — Registry & API (v0.1.0)
 - [x] **Curated catalog** — filesystem/github/fetch/postgres/nekko-vault + custom server config. · [spec](SPEC.md#33-registry--catalog-shipped)
+- [x] **Fly.io catalog entry** — one-click add for the Fly.io MCP server (`flyctl mcp server`, stdio; prompts for `FLY_API_TOKEN`). Verified end to end: added → `ready` → 60 `fly-*` tools aggregated as `fly__*` through the gateway; a `fly__fly-apps-list` call routes to flyctl and returns the auth-required error until `flyctl auth login`. · [spec](SPEC.md#33-registry--catalog-shipped) · Done: 2026-07-21
 - [x] **Daemon HTTP management API** — list/add/remove/start/stop/restart/logs/gateway + client-config export. · [spec](SPEC.md#32-gateway-shipped)
 - [ ] **Official MCP registry search/sync** — search the public registry from the Add flow, beyond the curated snapshot. · Added: 2026-07-04
 - [ ] **Import existing configs** — one-click import of `.mcp.json` / Claude Desktop / Cursor server configs into managed servers. · Added: 2026-07-04
@@ -108,6 +109,7 @@ Mirror of Part 1 §5. `[x]` = shipped per the prior plan · `[ ]` = open.
 - [x] **`apps/web` standalone UI** — list/status/add-from-catalog-or-custom/start-stop/restart/logs/tools/runtime-picker/gateway copy. · [spec](SPEC.md#34-ui-shipped)
 - [x] **Served by the daemon** — built UI served at `/` (path-sanitized static handler); one port for UI + API + gateway. · [spec](SPEC.md#34-ui-shipped) · Done: 2026-07-04
 - [x] **Fresh competitive design** — violet→cyan Nekko brand (Open Paw palette era): sticky header with daemon-status pill, hero + stat chips, gateway card (endpoint copy, masked token reveal/copy, snippet tabs for Claude Code / `.mcp.json` / stdio / Open Paw), server cards with status pills + expandable tool chips + logs, catalog grid with requires-chips + custom-server card, isolation segmented control in the add form, empty states, light+dark via `prefers-color-scheme`. Verified headless (screenshot). · [spec](SPEC.md#34-ui-shipped) · Done: 2026-07-04
+- [x] **Branded favicon** — `apps/web/public/favicon.svg` (violet→cyan rounded-square + white cat mark) replaces the 🐾 emoji data-URI; served by the daemon and copied into `dist/` by Vite. · [spec](SPEC.md#34-ui-shipped) · Done: 2026-07-21
 - [ ] **Live log streaming** — stream logs (SSE or poll-tail) instead of a snapshot on click. · Added: 2026-07-04
 - ~~**Extract `@nekko-mcp/ui`**~~ — parked: the Open Paw integration shipped natively against the daemon API (simpler than a cross-repo package); revisit only if a deeper embed is wanted. · Parked: 2026-07-04
 
@@ -115,5 +117,6 @@ Mirror of Part 1 §5. `[x]` = shipped per the prior plan · `[ ]` = open.
 - [x] **Open Paw ↔ NekkoMCP** — shipped in the open-paw repo (branch `feat/nekko-mcp-integration`): the Open Paw MCP client gained a **streamable-HTTP transport** (`McpServerConfig.url` + `token`, JSON/SSE reply parsing, session-id echo), a host-side `detectNekkoMcp()` probe (`mcp:nekko` channel through the five-touch chain), and a Settings card that shows a detected daemon with one-click **Connect gateway** + **Open manager** (workbench browser pane). Proven by `scripts/itest-mcp-http.mjs` (Open Paw host → gateway → echo server round trip + 401 on a bad token). · [spec](SPEC.md#35-integrations-shipped) · Done: 2026-07-04
 
 ## Epic 6 — Distribution (later)
+- [x] **Windows tray launcher** — `scripts/nekko-tray.ps1` (+ `.cmd`, `npm run tray`): a system-tray/taskbar icon (GDI+ gradient-cat, no .ico asset shipped) that keeps the daemon running and offers Open manager / Restart / Quit (double-click opens the UI). Interim desktop presence before the Electron shell. Verified: parses + draws, launches detached and stays alive (message loop up), starts a healthy token-auth daemon, Fly auto-starts from persisted config. · [spec](SPEC.md#34-ui-shipped) · Done: 2026-07-21
 - [ ] **npm publish `nekko-mcp` / `nekko-mcpd`** — so `npx nekko-mcp` starts the daemon (needs the user's npm login). · Added: 2026-07-04
 - [ ] **Electron shell · docker-compose · signed releases · GitHub Actions CI** (paused like Notes until launch). · [spec](SPEC.md#34-ui-shipped) · Added: 2026-06-29

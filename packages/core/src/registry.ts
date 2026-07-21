@@ -46,6 +46,16 @@ export const REGISTRY: RegistryEntry[] = [
     homepage: 'https://github.com/modelcontextprotocol/servers',
   },
   {
+    id: 'fly',
+    name: 'Fly.io',
+    description: 'Deploy and manage Fly.io apps: status, logs, secrets, machines, scaling, and releases.',
+    runtime: 'process',
+    command: 'flyctl',
+    args: ['mcp', 'server'],
+    requires: ['FLY_API_TOKEN'],
+    homepage: 'https://fly.io/docs/flyctl/mcp/',
+  },
+  {
     id: 'nekko-vault',
     name: 'Nekko Vault',
     description: 'Your Nekko Notes vault as agent memory + RAG (list/search/read/create notes).',

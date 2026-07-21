@@ -77,7 +77,7 @@ Journeys: add a server (from catalog or custom command/image) → choose runtime
 ### 3.3 Registry / catalog `[shipped]`
 | Feature | Description | Status | Release |
 | --- | --- | --- | --- |
-| Curated catalog | Built-in list of popular MCP servers (filesystem, github, postgres, fetch, **nekko-vault-mcp**, …) with one-click add | shipped | v0.1.0 |
+| Curated catalog | Built-in list of popular MCP servers (filesystem, github, postgres, fetch, **Fly.io** (`flyctl mcp server`), **nekko-vault-mcp**, …) with one-click add | shipped | v0.1.0 |
 | Custom server | Add by command+args+env (process) or image (docker) | shipped | v0.1.0 |
 | Registry sync | Search/sync the official MCP registry (beyond the curated snapshot) | planned | later |
 
@@ -86,8 +86,9 @@ Journeys: add a server (from catalog or custom command/image) → choose runtime
 | --- | --- | --- | --- |
 | Web UI | Server list with status, add-from-catalog/custom, start/stop, logs viewer, tools inspector, copy gateway URL + per-client config snippets | shipped | v0.1.0 |
 | Served by the daemon | The built UI is served at the daemon root, one port does UI + API + gateway | shipped | v0.2.0 |
-| Fresh design | Violet→cyan Nekko brand (matches Open Paw's palette era), hero gateway card with endpoint + masked token + snippet tabs (Claude Code / .mcp.json / stdio / Open Paw), status pills, catalog grid, light+dark | shipped | v0.2.0 |
-| Electron shell | Standalone desktop app wrapping the daemon + UI | planned | later |
+| Fresh design | Violet→cyan Nekko brand (matches Open Paw's palette era), hero gateway card with endpoint + masked token + snippet tabs (Claude Code / .mcp.json / stdio / Open Paw), status pills, catalog grid, light+dark. Branded SVG favicon (gradient rounded-square + cat mark) | shipped | v0.2.0 |
+| Windows tray launcher | `scripts/nekko-tray.ps1` (+ `.cmd`, `npm run tray`): a system-tray/taskbar icon (GDI+ gradient cat, no .ico asset) that keeps the daemon running and offers Open manager / Restart / Quit. Interim desktop presence before the Electron shell | shipped | v0.2.0 |
+| Electron shell | Standalone cross-platform desktop app wrapping the daemon + UI | planned | later |
 
 ### 3.5 Integrations `[shipped]`
 | Feature | Description | Status | Release |
