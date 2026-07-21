@@ -43,6 +43,18 @@ npm run daemon                           # UI + API + /mcp gateway on http://loc
 node apps/daemon/dist/index.js --stdio   # the aggregated gateway over stdio
 ```
 
+### Run it as a desktop app (Windows)
+
+```bash
+npm run build && npm run tray            # tray icon in the taskbar; keeps the daemon up
+```
+
+`scripts/nekko-tray.cmd` launches a system-tray icon (right-click for **Open manager / Restart / Quit**, double-click opens the UI). Drop a shortcut to it in your Startup folder (`Win+R` → `shell:startup`) to run it at login. A cross-platform Electron shell is planned; this is the lightweight interim.
+
+### Deploy targets via the Fly.io server
+
+The catalog ships a **Fly.io** entry (`flyctl mcp server`, needs the [Fly CLI](https://fly.io/docs/flyctl/install/)). Add it, provide a `FLY_API_TOKEN` (or run `flyctl auth login`), and your agent can deploy and manage Fly apps through the one gateway URL.
+
 ### Use it from your agent
 
 One endpoint for all your servers. HTTP (recommended, the daemon keeps supervising):

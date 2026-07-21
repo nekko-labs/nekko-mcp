@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="NekkoMCP">
+  <defs>
+    <linearGradient id="nekkoG" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6d5efc"/>
+      <stop offset="1" stop-color="#22d3ee"/>
+    </linearGradient>
+  </defs>
+  <rect x="6" y="6" width="88" height="88" rx="22" fill="url(#nekkoG)"/>
+  <!-- nekko: a calm cat mark in white -->
+  <g fill="#fff">
+    <path d="M30 28 L37 55 L20 49 Z"/>
+    <path d="M70 28 L63 55 L80 49 Z"/>
+    <circle cx="50" cy="58" r="25"/>
+  </g>
+  <!-- eyes + nose pick up the brand gradient -->
+  <g fill="url(#nekkoG)">
+    <circle cx="41" cy="55" r="3.4"/>
+    <circle cx="59" cy="55" r="3.4"/>
+    <path d="M50 61 l-3.4 3.4 h6.8 Z"/>
+  </g>
+</svg>

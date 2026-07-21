@@ -17,6 +17,7 @@
     "dev:daemon": "npm run dev -w @nekko-mcp/daemon",
     "dev:web": "npm run dev -w @nekko-mcp/web",
     "daemon": "node --experimental-strip-types apps/daemon/src/index.ts",
+    "tray": "scripts\\nekko-tray.cmd",
     "smoke:http": "node scripts/smoke-http.mjs",
     "typecheck": "tsc -b --noEmit || true"
   },
