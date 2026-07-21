@@ -23,7 +23,7 @@ const DATA_DIR = process.env.NEKKO_MCP_DIR ?? join(homedir(), '.nekko-mcp');
 const CONFIG_PATH = join(DATA_DIR, 'servers.json');
 const TOKEN_PATH = join(DATA_DIR, 'gateway-token');
 const PORT = Number(process.env.PORT ?? 7777);
-const VERSION = '0.2.0';
+const VERSION = '0.3.0';
 
 const loadConfig = (): ManagedServerConfig[] => {
   try {
@@ -64,7 +64,7 @@ const startEnabled = async (): Promise<void> => {
 // ── stdio gateway mode (the single aggregated endpoint for harnesses) ──────
 if (process.argv.includes('--stdio')) {
   await startEnabled();
-  const gateway = createGateway(supervisor, { name: 'nekko-mcp-gateway', version: VERSION });
+  const gateway = createGateway(supervisor, { name: 'nekko-mcp-gateway', version: VERSION }, { caller: 'stdio (local)' });
   await gateway.connect(new StdioServerTransport());
   // stdout is the MCP channel now; logs must go to stderr only.
   process.stderr.write(`nekko-mcpd gateway (stdio) up — ${supervisor.ids().length} server(s)\n`);
@@ -92,6 +92,29 @@ if (process.argv.includes('--stdio')) {
     if (got.length !== TOKEN.length) return false;
     return timingSafeEqual(Buffer.from(got), Buffer.from(TOKEN));
   };
+  // Best-effort caller identity for analytics. The gateway is stateless (a fresh
+  // instance per request), so we can't correlate by session; instead we capture
+  // the MCP handshake's clientInfo on `initialize` and attribute the tool calls
+  // that follow to that client. Falls back to an X-Client-Name header or the
+  // User-Agent. All local; nothing leaves the machine.
+  let lastClient: { name: string; at: number } | undefined;
+  const shortUa = (ua: string): string => {
+    const first = ua.split(/[\s/]/)[0]?.trim();
+    return first ? first : 'http client';
+  };
+  const callerFor = (req: IncomingMessage, body: unknown): string => {
+    const b = body as { method?: string; params?: { clientInfo?: { name?: string; version?: string } } } | undefined;
+    if (b?.method === 'initialize') {
+      const ci = b.params?.clientInfo;
+      const name = ci?.name ? `${ci.name}${ci.version ? ` ${ci.version}` : ''}` : undefined;
+      if (name) lastClient = { name, at: Date.now() };
+    }
+    if (lastClient && Date.now() - lastClient.at < 10 * 60_000) return lastClient.name;
+    const hdr = req.headers['x-client-name'];
+    if (typeof hdr === 'string' && hdr.trim()) return hdr.trim();
+    return shortUa(req.headers['user-agent'] ?? '');
+  };
+
   const gatewayInfo = (): GatewayInfo => {
     const url = `http://localhost:${PORT}/mcp`;
     return {
@@ -154,7 +177,7 @@ if (process.argv.includes('--stdio')) {
       try {
         const body = JSON.parse(await readBody(req));
         const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
-        const gateway = createGateway(supervisor, { name: 'nekko-mcp-gateway', version: VERSION });
+        const gateway = createGateway(supervisor, { name: 'nekko-mcp-gateway', version: VERSION }, { caller: callerFor(req, body) });
         res.on('close', () => {
           void transport.close();
           void gateway.close();
@@ -170,6 +193,7 @@ if (process.argv.includes('--stdio')) {
     if (pathname === '/health') return json(res, 200, { ok: true, service: 'nekko-mcpd', version: VERSION, servers: supervisor.list().length });
     if (pathname === '/api/registry') return json(res, 200, REGISTRY);
     if (pathname === '/api/gateway') return json(res, 200, gatewayInfo());
+    if (pathname === '/api/analytics') return json(res, 200, supervisor.analytics());
     if (pathname === '/api/servers' && req.method === 'GET') return json(res, 200, supervisor.list());
 
     // add a server (custom config, or a registry entry merged with overrides)
