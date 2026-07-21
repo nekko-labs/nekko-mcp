@@ -43,7 +43,7 @@ NekkoMCP lets the user choose the runtime per install (and per server override).
 Default = **process sandbox** (works everywhere); **Docker** offered prominently for those who want container isolation. The choice is a setup step and overridable per server.
 
 ### Scope boundaries (deliberate)
-- **Local-first**: the runtime + gateway run on the user's machine; no account or cloud required. A hosted/team tier may come later.
+- **Local-first**: the runtime + gateway run on the user's machine; no account or cloud required. A hosted/team tier may come later. The daemon makes no outbound calls on its own, with one deliberate, user-initiated exception: **registry search** fetches the public MCP registry only while the user is typing a query (never on boot).
 - **Harness-agnostic**: we expose a standard MCP gateway (stdio + streamable HTTP/SSE) so *any* client works; we don't lock to Open Paw.
 - Not a hosted SaaS registry (we ship a curated catalog + custom server config; community/registry sync is later).
 
@@ -72,7 +72,7 @@ Journeys: add a server (from catalog or custom command/image) → choose runtime
 | stdio transport | `nekko-mcpd --stdio` for direct client spawn | shipped | v0.1.0 |
 | Streamable HTTP transport | `/mcp` on the daemon port (stateless, JSON responses); proven by an HTTP smoke test and the live Open Paw client | shipped | v0.2.0 |
 | Gateway bearer token | Auto-generated, persisted, enforced on `/mcp` (401 otherwise), surfaced in the UI + `/api/gateway` | shipped | v0.2.0 |
-| Per-client tokens + allow-list | Token per client with an allow-list of which servers/tools each client sees | planned | v0.3.0 |
+| Per-client tokens + allow-list | Named **connected agents**, each with its own gateway token scoped to a per-server allow-list (`'*'` or specific servers). The gateway hides disallowed servers from `tools/list` and refuses their `tools/call`; the master token keeps full access. Calls are attributed to the agent's name in analytics. Managed at `/api/clients` + the UI's "Connected agents" section. Granularity is per-server (not per-tool) by design | shipped | v0.4.0 |
 | Resources & prompts aggregation | Aggregate `resources`/`prompts` alongside tools | planned | v0.3.0 |
 
 ### 3.3 Registry / catalog `[shipped]`
@@ -80,7 +80,8 @@ Journeys: add a server (from catalog or custom command/image) → choose runtime
 | --- | --- | --- | --- |
 | Curated catalog | Built-in list of popular MCP servers (filesystem, github, postgres, fetch, **Fly.io** (`flyctl mcp server`), **nekko-vault-mcp**, …) with one-click add | shipped | v0.1.0 |
 | Custom server | Add by command+args+env (process) or image (docker) | shipped | v0.1.0 |
-| Registry sync | Search/sync the official MCP registry (beyond the curated snapshot) | planned | later |
+| Registry search | Search the **official open-source MCP Registry** (`registry.modelcontextprotocol.io`) from the Add flow. The daemon fetches on-demand at `/api/registry/search` and maps each hit (npm→`npx`, pypi→`uvx`, oci→docker image, env vars→prompts) into an add-ready entry; remote-only servers are shown but flagged not-yet-runnable. This is the one deliberate outbound call the daemon makes, and only when the user searches | shipped | v0.4.0 |
+| Registry sync | Background sync / caching of the registry snapshot (beyond on-demand search) | planned | later |
 
 ### 3.4 UI `[shipped]`
 | Feature | Description | Status | Release |
@@ -89,6 +90,9 @@ Journeys: add a server (from catalog or custom command/image) → choose runtime
 | Served by the daemon | The built UI is served at the daemon root, one port does UI + API + gateway | shipped | v0.2.0 |
 | Fresh design | Violet→cyan Nekko brand (matches Open Paw's palette era), hero gateway card with endpoint + masked token + snippet tabs (Claude Code / .mcp.json / stdio / Open Paw), status pills, catalog grid, light+dark. Branded SVG favicon (gradient rounded-square + cat mark) | shipped | v0.2.0 |
 | List-first, de-boxed redesign | **Medium** theme is the shipped default (calm mid-slate) with a topbar Light/Medium/Dark switch (persisted, no-flash). Active servers are the primary view as a clean list (hairline dividers, not per-card boxes); the gateway is a slim bar with the connect snippets behind a disclosure; the catalog moved behind **+ Add server**. Servers / Analytics tabs in the topbar | shipped | v0.3.0 |
+| Tool inspector (list view) | A server's tools expand into a clickable list; clicking a tool reveals its description and parameters (name, type, required) parsed from its input schema, replacing the flat namespaced chips | shipped | v0.4.0 |
+| Registry search box | The Add-server area gained a debounced search over the official MCP registry, mapped into add-ready catalog rows (with a `registry` tag + not-runnable notes); the curated list + custom card remain the default when the box is empty. The add form also gained a Docker **image** field | shipped | v0.4.0 |
+| Connected agents section | Lists each scoped agent with its masked token (reveal/copy), a connect snippet, and its allowed servers as chips underneath; an inline editor (name + an all-servers toggle / per-server checklist) creates and edits agents | shipped | v0.4.0 |
 | Windows tray launcher | `scripts/nekko-tray.ps1` (+ `.cmd`, `npm run tray`): a system-tray/taskbar icon (GDI+ gradient cat, no .ico asset) that keeps the daemon running and offers Open manager / Restart / Quit. Interim desktop presence before the Electron shell | shipped | v0.2.0 |
 | Electron shell | Standalone cross-platform desktop app wrapping the daemon + UI | planned | later |
 
@@ -107,7 +111,7 @@ The gateway is the perfect vantage point: every tool call fans through it, so we
 | Call recording | The gateway records every routed tool call as a `UsageEvent` (server, tool, caller, ok/error incl. tool-level `isError`, duration, bytes in/out). Aggregated in the supervisor: per-server, per-tool, per-client totals + a capped recent-event ring buffer | shipped | v0.3.0 |
 | Caller identity | Best-effort "who called" from the MCP handshake's `clientInfo` (captured on `initialize`, attributed to the calls that follow), falling back to an `X-Client-Name` header / User-Agent; stdio callers labelled `stdio (local)`. Local heuristic — the gateway is stateless so there's no session to correlate | shipped | v0.3.0 |
 | Analytics API + tab | `/api/analytics` serves an `AnalyticsSummary`; the UI's **Analytics** tab shows headline metrics (calls, success rate, clients, data in/out), a 24h call-volume sparkline, usage-by-server (top tools, error count, latency, data), a who's-calling breakdown, and a live recent-calls feed | shipped | v0.3.0 |
-| Persistence across restarts | Persist aggregates/events to `~/.nekko-mcp` so analytics survive a daemon restart (in-memory today, resets on restart) | planned | later |
+| Persistence across restarts | Aggregates + the recent-event ring are persisted to `~/.nekko-mcp/analytics.json` (debounced writes, flush on shutdown) and re-hydrated on boot, so usage — and the "since" start time — survive a daemon restart | shipped | v0.4.0 |
 
 ## 4. Design System & Considerations
 Nekko design language, current era: cool ink/paper neutrals, **indigo-violet accent + cyan `#22d3ee` secondary** into a violet→cyan brand gradient (matching Open Paw's palette refresh), calm/minimal, the paw/cat mark. Three themes selectable from the topbar and driven entirely by CSS custom properties on `<html data-theme>`: **Medium** (the shipped default — a calm mid-slate), **Dark** (near-black), **Light**; the choice is persisted and applied before paint (no flash). The look is deliberately de-boxed: hairline-divided lists over stacked bordered cards. The UI must read as a sibling of Open Paw and Nekko Notes. Status pills: ready=success, starting=warning, errored=danger, stopped=muted. Logs are monospace, capped ring-buffer.

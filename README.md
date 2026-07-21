@@ -65,10 +65,12 @@ claude mcp add -t http nekko-mcp http://localhost:7777/mcp -H "Authorization: Be
 
 or stdio: `{ "mcpServers": { "nekko-mcp": { "command": "nekko-mcpd", "args": ["--stdio"] } } }`
 
+**Scoped agents.** The master token above sees every server. To hand a specific client a narrower token, add a **connected agent** in the UI (or `POST /api/clients`), pick which servers it may use, and give it that agent's token — it will only see and call the servers you allowed, and its calls show up under its name in Analytics.
+
 **Open Paw** auto-detects a running daemon: Settings → MCP servers → **Connect gateway** (one click), plus an **Open manager** button that opens this UI in a workbench pane.
 
 ## Status
-Kicked off 2026-06-28. **v0.3**: process + Docker runtimes, supervisor, aggregating gateway over stdio **and** streamable HTTP (bearer token), daemon-served web UI, curated catalog, Open Paw one-click integration — plus a **list-first redesign** (Medium theme by default with a Light/Medium/Dark switch; active servers as the primary view; slim gateway bar) and **usage analytics**: every gateway call is recorded (which server, which client, how much data) and surfaced in an Analytics tab, all local. Next: per-client allow-lists, resources/prompts aggregation, crash backoff, keychain secrets, analytics persistence. See `SPEC.md`/`TASKS.md`.
+Kicked off 2026-06-28. **v0.4** adds **connected agents** (named, per-server-scoped gateway tokens), **registry search** (search the official open-source MCP registry from the Add flow), a **tool inspector** (click a tool to see its description + parameters), and **analytics persistence** (usage survives a daemon restart). On top of **v0.3**: process + Docker runtimes, supervisor, aggregating gateway over stdio **and** streamable HTTP (bearer token), daemon-served web UI, curated catalog, Open Paw one-click integration, a list-first redesign, and usage analytics. Next: resources/prompts aggregation, crash backoff, keychain secrets, registry background sync. See `SPEC.md`/`TASKS.md`.
 
 ## Analytics — visibility for free
 Because every tool call fans through the one gateway, NekkoMCP records it: server, tool, caller (from the MCP handshake), success/error, latency, and bytes in/out. The web UI's **Analytics** tab turns that into headline metrics, a 24h call-volume sparkline, usage-by-server, a who's-calling breakdown, and a live recent-calls feed — served from `/api/analytics`. It's a private audit trail with nothing to wire up and no data leaving your machine.

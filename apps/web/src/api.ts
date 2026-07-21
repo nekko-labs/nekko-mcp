@@ -1,4 +1,11 @@
-import type { ServerStatus, RegistryEntry, GatewayInfo, ManagedServerConfig, AnalyticsSummary } from '@nekko-mcp/shared';
+import type {
+  ServerStatus,
+  RegistryEntry,
+  GatewayInfo,
+  ManagedServerConfig,
+  AnalyticsSummary,
+  AgentClientInfo,
+} from '@nekko-mcp/shared';
 
 // Dev proxies /api → daemon; in a packaged build set VITE_DAEMON_URL.
 const BASE = (import.meta.env.VITE_DAEMON_URL ?? '').replace(/\/$/, '');
@@ -17,4 +24,11 @@ export const api = {
   add: (cfg: ManagedServerConfig) => j<ServerStatus>('/api/servers', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(cfg) }),
   action: (id: string, action: 'start' | 'stop' | 'restart') => j<ServerStatus>(`/api/servers/${id}/${action}`, { method: 'POST' }),
   remove: (id: string) => j<{ ok: boolean }>(`/api/servers/${id}`, { method: 'DELETE' }),
+  searchRegistry: (q: string) => j<RegistryEntry[]>(`/api/registry/search?q=${encodeURIComponent(q)}`),
+  clients: () => j<AgentClientInfo[]>('/api/clients'),
+  addClient: (name: string, servers: '*' | string[]) =>
+    j<AgentClientInfo>('/api/clients', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, servers }) }),
+  updateClient: (id: string, patch: { name?: string; servers?: '*' | string[] }) =>
+    j<AgentClientInfo>(`/api/clients/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }),
+  removeClient: (id: string) => j<{ ok: boolean }>(`/api/clients/${id}`, { method: 'DELETE' }),
 };
