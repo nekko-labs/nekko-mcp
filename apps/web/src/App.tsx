@@ -1,6 +1,16 @@
 import { useEffect, useState, useCallback } from 'react';
-import type { ServerStatus, RegistryEntry, GatewayInfo, ManagedServerConfig, RuntimeKind } from '@nekko-mcp/shared';
+import type {
+  ServerStatus,
+  RegistryEntry,
+  GatewayInfo,
+  ManagedServerConfig,
+  RuntimeKind,
+  AnalyticsSummary,
+} from '@nekko-mcp/shared';
 import { api } from './api';
+
+type View = 'servers' | 'analytics';
+type Theme = 'light' | 'medium' | 'dark';
 
 function useCopy(): [string | null, (key: string, text: string) => void] {
   const [copied, setCopied] = useState<string | null>(null);
@@ -12,16 +22,40 @@ function useCopy(): [string | null, (key: string, text: string) => void] {
   return [copied, copy];
 }
 
+const fmtNum = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k` : `${n}`);
+const fmtBytes = (n: number): string => {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+};
+const fmtRel = (iso?: string): string => {
+  if (!iso) return 'never';
+  const s = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 5) return 'just now';
+  if (s < 60) return `${s}s ago`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.round(h / 24)}d ago`;
+};
+const fmtClock = (iso: string): string => new Date(iso).toLocaleTimeString([], { hour12: false });
+
 export function App() {
+  const [view, setView] = useState<View>('servers');
   const [servers, setServers] = useState<ServerStatus[] | null>(null);
   const [registry, setRegistry] = useState<RegistryEntry[]>([]);
   const [gateway, setGateway] = useState<GatewayInfo | null>(null);
+  const [stats, setStats] = useState<AnalyticsSummary | null>(null);
   const [offline, setOffline] = useState(false);
   const [adding, setAdding] = useState<RegistryEntry | 'custom' | null>(null);
+  const [showCatalog, setShowCatalog] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
-      setServers(await api.servers());
+      const [s, a] = await Promise.all([api.servers(), api.analytics().catch(() => null)]);
+      setServers(s);
+      if (a) setStats(a);
       setOffline(false);
     } catch {
       setOffline(true);
@@ -45,89 +79,114 @@ export function App() {
         <div className="topbar-in">
           <div className="logo-tile">🐾</div>
           <span className="wordmark">NekkoMCP</span>
-          <span className="chip">v0.2</span>
+          <span className="chip">v0.3</span>
+          <nav className="nav">
+            <button className={view === 'servers' ? 'active' : ''} onClick={() => setView('servers')}>Servers</button>
+            <button className={view === 'analytics' ? 'active' : ''} onClick={() => setView('analytics')}>
+              Analytics{stats && stats.totalCalls > 0 && <span className="n-badge">{fmtNum(stats.totalCalls)}</span>}
+            </button>
+          </nav>
+          <div className="spacer" />
+          <ThemeSwitch />
           <span className={`pill ${offline ? 'pill-errored' : 'pill-ready'}`}>
             <span className="dot" />
-            {offline ? 'daemon offline' : 'daemon running'}
+            {offline ? 'daemon offline' : 'daemon up'}
           </span>
-          <div className="spacer" />
           <a className="small muted" href="https://github.com/nekko-labs/nekko-mcp" target="_blank" rel="noreferrer">GitHub</a>
         </div>
       </header>
 
       <div className="wrap">
-        <section className="hero">
-          <h1>
-            Every MCP server. <span className="grad-text">One endpoint.</span>
-          </h1>
-          <p className="sub">
-            Run MCP servers in sandboxed processes or Docker containers, supervise them,
-            and connect any agent, Claude Code, Cursor, Open Paw, through a single gateway URL.
-            Local-first, open source, no account.
-          </p>
-          <div className="stats">
-            <div className="stat"><b>{servers?.length ?? '–'}</b><span>servers</span></div>
-            <div className="stat"><b>{running}</b><span>running</span></div>
-            <div className="stat"><b>{tools}</b><span>tools aggregated</span></div>
-          </div>
-        </section>
-
         {offline && (
-          <div className="card banner">
+          <div className="banner">
             <b>Can't reach the daemon.</b>{' '}
-            <span className="muted">Start it with <code>npm run daemon</code> (or <code>npm run dev</code>), then this page reconnects automatically.</span>
+            <span className="muted">Start it with <code>npm run daemon</code> (or <code>npm run dev</code>) — this page reconnects automatically.</span>
           </div>
         )}
 
-        {gateway && <GatewayCard gateway={gateway} />}
+        {view === 'servers' ? (
+          <>
+            <div className="pagehead">
+              <div>
+                <h1>Every MCP server. <span className="grad-text">One endpoint.</span></h1>
+                <p>Run servers in sandboxed processes or Docker, supervise them, and connect any agent through a single gateway URL — with full local visibility into every call.</p>
+              </div>
+              <div className="summary">
+                <b>{servers?.length ?? '–'}</b> servers<span className="sep">·</span>
+                <b>{running}</b> running<span className="sep">·</span>
+                <b>{tools}</b> tools
+              </div>
+            </div>
 
-        <h3 className="section-title">Servers</h3>
-        {servers && servers.length === 0 ? (
-          <div className="empty">
-            <div className="cat">🐈</div>
-            <b>No servers yet.</b>
-            <div className="small" style={{ marginTop: 4 }}>Add one from the catalog below, its tools join the gateway instantly.</div>
-          </div>
+            {gateway && <GatewayBar gateway={gateway} />}
+
+            <div className="section-title">
+              Active servers
+              <span className="rt">
+                <button className="btn sm" onClick={() => { setShowCatalog((v) => !v); setAdding(null); }}>
+                  {showCatalog ? 'Close' : '+ Add server'}
+                </button>
+              </span>
+            </div>
+
+            {servers && servers.length === 0 && !showCatalog ? (
+              <div className="panel"><div className="empty">
+                <div className="cat">🐈</div>
+                <b>No servers yet.</b>
+                <div className="small" style={{ marginTop: 4 }}>Add one — its tools join the gateway instantly.</div>
+                <div style={{ marginTop: 14 }}><button className="btn btn-primary" onClick={() => setShowCatalog(true)}>+ Add your first server</button></div>
+              </div></div>
+            ) : servers && servers.length > 0 ? (
+              <div className="panel"><div className="list">
+                {servers.map((s) => <ServerRow key={s.id} s={s} onChange={refresh} />)}
+              </div></div>
+            ) : null}
+
+            {showCatalog && (
+              <>
+                <div className="section-title" style={{ marginTop: 22 }}>Add from catalog</div>
+                <div className="panel"><div className="list">
+                  {registry.map((e) => (
+                    <div key={e.id} className="list-row">
+                      <div className="row between wrap-gap">
+                        <div style={{ flex: 1, minWidth: 200 }}>
+                          <div className="row" style={{ gap: 8 }}>
+                            <span className="server-name">{e.name}</span>
+                            <span className="chip">{e.runtime === 'docker' ? '🐳 docker' : '⚡ process'}</span>
+                            {(e.requires ?? []).map((r) => <span key={r} className="chip mono">{r}</span>)}
+                          </div>
+                          <div className="small muted" style={{ marginTop: 3 }}>{e.description}</div>
+                        </div>
+                        <div className="row">
+                          {e.homepage && <a className="small muted" href={e.homepage} target="_blank" rel="noreferrer">docs</a>}
+                          <button className="btn" onClick={() => setAdding(e)}>+ Add</button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  <div className="list-row">
+                    <div className="row between wrap-gap">
+                      <div style={{ flex: 1, minWidth: 200 }}>
+                        <span className="server-name">Custom server</span>
+                        <div className="small muted" style={{ marginTop: 3 }}>Any stdio MCP server, by command (process sandbox) or image (Docker).</div>
+                      </div>
+                      <button className="btn btn-primary" onClick={() => setAdding('custom')}>+ Configure</button>
+                    </div>
+                  </div>
+                </div></div>
+              </>
+            )}
+
+            {adding && (
+              <AddServer
+                entry={adding === 'custom' ? null : adding}
+                onClose={() => setAdding(null)}
+                onAdded={() => { setAdding(null); setShowCatalog(false); void refresh(); }}
+              />
+            )}
+          </>
         ) : (
-          <div className="server-list">
-            {servers?.map((s) => <ServerRow key={s.id} s={s} onChange={refresh} />)}
-          </div>
-        )}
-
-        <h3 className="section-title">Add servers</h3>
-        <div className="catalog">
-          {registry.map((e) => (
-            <div key={e.id} className="card flat catalog-card">
-              <div className="row between">
-                <h4>{e.name}</h4>
-                <span className="chip">{e.runtime}</span>
-              </div>
-              <p>{e.description}</p>
-              {(e.requires ?? []).length > 0 && (
-                <div className="req">{e.requires!.map((r) => <span key={r} className="chip mono">{r}</span>)}</div>
-              )}
-              <div className="row between" style={{ marginTop: 4 }}>
-                {e.homepage ? <a className="small" href={e.homepage} target="_blank" rel="noreferrer">docs</a> : <span />}
-                <button className="btn" onClick={() => setAdding(e)}>+ Add</button>
-              </div>
-            </div>
-          ))}
-          <div className="card flat catalog-card" style={{ borderStyle: 'dashed' }}>
-            <h4>Custom server</h4>
-            <p>Any stdio MCP server, by command (process sandbox) or image (Docker).</p>
-            <div className="row between" style={{ marginTop: 4 }}>
-              <span />
-              <button className="btn btn-primary" onClick={() => setAdding('custom')}>+ Configure</button>
-            </div>
-          </div>
-        </div>
-
-        {adding && (
-          <AddServer
-            entry={adding === 'custom' ? null : adding}
-            onClose={() => setAdding(null)}
-            onAdded={() => { setAdding(null); void refresh(); }}
-          />
+          <AnalyticsView stats={stats} />
         )}
 
         <div className="footer">
@@ -140,11 +199,28 @@ export function App() {
   );
 }
 
-function GatewayCard({ gateway }: { gateway: GatewayInfo }) {
+function ThemeSwitch() {
+  const [theme, setTheme] = useState<Theme>(() => (document.documentElement.getAttribute('data-theme') as Theme) || 'medium');
+  const set = (t: Theme) => {
+    setTheme(t);
+    document.documentElement.setAttribute('data-theme', t);
+    try { localStorage.setItem('nekko-theme', t); } catch { /* ignore */ }
+  };
+  const opts: [Theme, string, string][] = [['light', '☀', 'Light'], ['medium', '◐', 'Medium'], ['dark', '☾', 'Dark']];
+  return (
+    <div className="themeswitch" role="group" aria-label="Theme">
+      {opts.map(([t, icon, label]) => (
+        <button key={t} className={theme === t ? 'active' : ''} title={label} aria-label={label} onClick={() => set(t)}>{icon}</button>
+      ))}
+    </div>
+  );
+}
+
+function GatewayBar({ gateway }: { gateway: GatewayInfo }) {
   const [copied, copy] = useCopy();
   const [showToken, setShowToken] = useState(false);
+  const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<'claude' | 'json' | 'stdio' | 'openpaw'>('claude');
-
   const token = gateway.token ?? '';
   const snippets: Record<string, string> = {
     claude: `claude mcp add -t http nekko-mcp ${gateway.url} -H "Authorization: Bearer ${token}"`,
@@ -152,39 +228,35 @@ function GatewayCard({ gateway }: { gateway: GatewayInfo }) {
     stdio: JSON.stringify(gateway.stdioSnippet ?? { mcpServers: { 'nekko-mcp': { command: 'nekko-mcpd', args: ['--stdio'] } } }, null, 2),
     openpaw: 'Open Paw auto-detects NekkoMCP.\nSettings → MCP servers → "Connect NekkoMCP gateway" — one click, done.',
   };
-
   return (
-    <section className="card" style={{ marginTop: 10 }}>
-      <div className="row between">
-        <b>Gateway</b>
-        <span className="chip chip-accent">every running server, one MCP endpoint</span>
+    <div className="gwbar">
+      <div className="gwbar-row">
+        <span className="glabel"><span className="dot-grad" />Gateway</span>
+        <span className="url">{gateway.url}</span>
+        <button className="btn sm" onClick={() => copy('url', gateway.url)}>{copied === 'url' ? 'Copied!' : 'Copy'}</button>
+        <div className="spacer" style={{ flex: 1 }} />
+        <span className="tok">token {showToken ? token.slice(0, 12) + '…' : '••••••'}</span>
+        <button className="btn sm btn-ghost" onClick={() => setShowToken(!showToken)}>{showToken ? 'Hide' : 'Show'}</button>
+        <button className="btn sm" onClick={() => copy('token', token)}>{copied === 'token' ? 'Copied!' : 'Copy'}</button>
+        <button className="btn sm" onClick={() => setOpen(!open)}>Connect an agent {open ? '▴' : '▾'}</button>
       </div>
-
-      <div className="endpoint">
-        <span className="label">HTTP</span>
-        <span className="value">{gateway.url}</span>
-        <button className="btn" onClick={() => copy('url', gateway.url)}>{copied === 'url' ? 'Copied!' : 'Copy'}</button>
-      </div>
-      <div className="endpoint">
-        <span className="label">Token</span>
-        <span className="value">{showToken ? token : '•'.repeat(Math.min(token.length, 40))}</span>
-        <button className="btn btn-ghost" onClick={() => setShowToken(!showToken)}>{showToken ? 'Hide' : 'Show'}</button>
-        <button className="btn" onClick={() => copy('token', token)}>{copied === 'token' ? 'Copied!' : 'Copy'}</button>
-      </div>
-
-      <div className="tabs">
-        <button className={`tab ${tab === 'claude' ? 'active' : ''}`} onClick={() => setTab('claude')}>Claude Code</button>
-        <button className={`tab ${tab === 'json' ? 'active' : ''}`} onClick={() => setTab('json')}>.mcp.json</button>
-        <button className={`tab ${tab === 'stdio' ? 'active' : ''}`} onClick={() => setTab('stdio')}>stdio</button>
-        <button className={`tab ${tab === 'openpaw' ? 'active' : ''}`} onClick={() => setTab('openpaw')}>Open Paw</button>
-      </div>
-      <pre className="snippet">{snippets[tab]}</pre>
-      {tab !== 'openpaw' && (
-        <div className="row" style={{ marginTop: 8, justifyContent: 'flex-end' }}>
-          <button className="btn" onClick={() => copy('snippet', snippets[tab])}>{copied === 'snippet' ? 'Copied!' : 'Copy snippet'}</button>
+      {open && (
+        <div className="connect-panel">
+          <div className="tabs">
+            <button className={`tab ${tab === 'claude' ? 'active' : ''}`} onClick={() => setTab('claude')}>Claude Code</button>
+            <button className={`tab ${tab === 'json' ? 'active' : ''}`} onClick={() => setTab('json')}>.mcp.json</button>
+            <button className={`tab ${tab === 'stdio' ? 'active' : ''}`} onClick={() => setTab('stdio')}>stdio</button>
+            <button className={`tab ${tab === 'openpaw' ? 'active' : ''}`} onClick={() => setTab('openpaw')}>Open Paw</button>
+          </div>
+          <pre className="snippet">{snippets[tab]}</pre>
+          {tab !== 'openpaw' && (
+            <div className="row" style={{ marginTop: 8, justifyContent: 'flex-end' }}>
+              <button className="btn sm" onClick={() => copy('snippet', snippets[tab])}>{copied === 'snippet' ? 'Copied!' : 'Copy snippet'}</button>
+            </div>
+          )}
         </div>
       )}
-    </section>
+    </div>
   );
 }
 
@@ -208,41 +280,151 @@ function ServerRow({ s, onChange }: { s: ServerStatus; onChange: () => void }) {
     setLogs((await api.logs(s.id).catch(() => ({ logs: [] }))).logs);
   };
   return (
-    <div className="card server-card">
-      <div className="row between">
-        <div className="row">
-          <span className={`pill ${STATE_PILL[s.state] ?? 'pill-stopped'}`}>
-            <span className="dot" />
-            {s.state}
-          </span>
+    <div className="list-row">
+      <div className="list-head between">
+        <div className="row wrap-gap">
+          <span className={`pill ${STATE_PILL[s.state] ?? 'pill-stopped'}`}><span className="dot" />{s.state}</span>
           <span className="server-name">{s.name}</span>
           <span className="chip">{s.runtime === 'docker' ? '🐳 docker' : '⚡ process'}</span>
           {s.state === 'ready' && (
-            <button className="btn btn-ghost small" style={{ padding: '2px 8px' }} onClick={() => setShowTools(!showTools)}>
-              {s.tools.length} tools {showTools ? '▾' : '▸'}
-            </button>
+            <button className="link-btn" onClick={() => setShowTools(!showTools)}>{s.tools.length} tools {showTools ? '▾' : '▸'}</button>
           )}
           {s.restarts > 0 && <span className="chip">{s.restarts} restarts</span>}
         </div>
         <div className="row">
           {s.state === 'ready' ? (
-            <button className="btn" onClick={() => void act('stop')}>Stop</button>
+            <button className="btn sm" onClick={() => void act('stop')}>Stop</button>
           ) : (
-            <button className="btn btn-primary" onClick={() => void act('start')} disabled={busy}>{busy ? 'Starting…' : 'Start'}</button>
+            <button className="btn sm btn-primary" onClick={() => void act('start')} disabled={busy}>{busy ? 'Starting…' : 'Start'}</button>
           )}
-          <button className="btn" onClick={() => void act('restart')}>Restart</button>
-          <button className="btn" onClick={() => void toggleLogs()}>Logs</button>
-          <button className="btn btn-danger" onClick={() => { void api.remove(s.id).then(onChange); }}>Remove</button>
+          <button className="btn sm" onClick={() => void act('restart')}>Restart</button>
+          <button className="btn sm" onClick={() => void toggleLogs()}>Logs</button>
+          <button className="btn sm btn-danger" onClick={() => { void api.remove(s.id).then(onChange); }}>Remove</button>
         </div>
       </div>
       {s.error && <p className="small" style={{ color: 'var(--danger)', margin: '8px 0 0' }}>{s.error}</p>}
       {showTools && s.tools.length > 0 && (
-        <div className="tool-chips">
-          {s.tools.map((t) => <span key={t} className="chip mono">{s.id}__{t}</span>)}
-        </div>
+        <div className="tool-chips">{s.tools.map((t) => <span key={t} className="chip mono">{s.id}__{t}</span>)}</div>
       )}
       {logs && <pre className="logs">{logs.join('\n') || '(no output yet)'}</pre>}
     </div>
+  );
+}
+
+function AnalyticsView({ stats }: { stats: AnalyticsSummary | null }) {
+  const hasData = !!stats && stats.totalCalls > 0;
+  const successRate = stats && stats.totalCalls > 0 ? Math.round(((stats.totalCalls - stats.totalErrors) / stats.totalCalls) * 100) : 100;
+  const maxSeries = stats ? Math.max(1, ...stats.series.map((b) => b.calls)) : 1;
+  const maxServer = stats ? Math.max(1, ...stats.servers.map((s) => s.calls)) : 1;
+  const maxClient = stats ? Math.max(1, ...stats.clients.map((c) => c.calls)) : 1;
+
+  return (
+    <>
+      <div className="pagehead">
+        <div>
+          <h1><span className="grad-text">Analytics</span> &amp; visibility</h1>
+          <p>Every tool call routed through the gateway, counted here — which server, which client, how much data. Local-first: nothing leaves your machine.</p>
+        </div>
+        {stats && <div className="summary">since <b>{fmtRel(stats.since)}</b></div>}
+      </div>
+
+      <div className="callout">
+        <span className="ic">🔎</span>
+        <div>
+          <div className="t">Why route through NekkoMCP? You get an audit trail for free.</div>
+          <div className="d">Point agents at one gateway and NekkoMCP records every call — per server, per client, per byte — so you can see exactly what your tools are doing. No dashboards to wire up, no data leaving localhost.</div>
+        </div>
+      </div>
+
+      <div className="metricbar">
+        <div className="metric accent"><div className="m-val">{fmtNum(stats?.totalCalls ?? 0)}</div><div className="m-label">tool calls</div></div>
+        <div className="metric"><div className="m-val">{successRate}<span className="u">%</span></div><div className="m-label">success rate</div></div>
+        <div className="metric"><div className="m-val">{stats?.clients.length ?? 0}</div><div className="m-label">clients</div></div>
+        <div className="metric"><div className="m-val">{fmtBytes(stats?.bytesIn ?? 0)}</div><div className="m-label">data in</div></div>
+        <div className="metric"><div className="m-val">{fmtBytes(stats?.bytesOut ?? 0)}</div><div className="m-label">data out</div></div>
+      </div>
+
+      {hasData ? (
+        <>
+          <div className="spark-wrap">
+            <div className="small muted" style={{ marginBottom: 2 }}>Calls · last 24h</div>
+            <div className="spark">
+              {stats!.series.map((b, i) => (
+                <div
+                  key={i}
+                  className={`spark-bar ${b.calls === 0 ? 'empty' : ''}`}
+                  style={{ height: `${Math.max(4, (b.calls / maxSeries) * 100)}%` }}
+                  title={`${new Date(b.t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} — ${b.calls} calls`}
+                />
+              ))}
+            </div>
+            <div className="spark-axis"><span>24h ago</span><span>now</span></div>
+          </div>
+
+          <div className="section-title" style={{ marginTop: 24 }}>Usage by server</div>
+          <div className="panel"><div className="list">
+            {stats!.servers.map((s) => (
+              <div key={s.serverId} className="list-row">
+                <div className="row between wrap-gap">
+                  <div><span className="server-name">{s.name}</span> <span className="small muted">{s.serverId}</span></div>
+                  <div className="u-metrics">
+                    <span><b>{fmtNum(s.calls)}</b> calls</span>
+                    <span><b>{s.avgMs}</b>ms avg</span>
+                    <span style={{ color: s.errors ? 'var(--danger)' : undefined }}><b>{s.errors}</b> err</span>
+                    <span><b>{fmtBytes(s.bytesIn)}</b> in</span>
+                    <span><b>{fmtBytes(s.bytesOut)}</b> out</span>
+                  </div>
+                </div>
+                <div className="bar-track" style={{ marginTop: 9 }}><div className="bar-fill" style={{ width: `${(s.calls / maxServer) * 100}%` }} /></div>
+                <div className="u-sub">
+                  {s.tools.slice(0, 6).map((t) => <span key={t.tool} className="chip mono">{t.tool} ·{t.calls}</span>)}
+                  <span style={{ marginLeft: 'auto' }}>{s.clients.length} client{s.clients.length === 1 ? '' : 's'} · last {fmtRel(s.lastUsed)}</span>
+                </div>
+              </div>
+            ))}
+          </div></div>
+
+          <div className="section-title" style={{ marginTop: 24 }}>Who's calling</div>
+          <div className="panel"><div className="list">
+            {stats!.clients.map((c) => (
+              <div key={c.client} className="list-row">
+                <div className="row between wrap-gap">
+                  <div className="server-name">{c.client}</div>
+                  <div className="u-metrics">
+                    <span><b>{fmtNum(c.calls)}</b> calls</span>
+                    <span><b>{fmtBytes(c.bytesIn + c.bytesOut)}</b> data</span>
+                    <span className="muted">{fmtRel(c.lastUsed)}</span>
+                  </div>
+                </div>
+                <div className="bar-track" style={{ marginTop: 9 }}><div className="bar-fill" style={{ width: `${(c.calls / maxClient) * 100}%` }} /></div>
+              </div>
+            ))}
+          </div></div>
+
+          <div className="section-title" style={{ marginTop: 24 }}>Recent calls</div>
+          <div className="panel"><div className="feed">
+            {stats!.recent.map((e, i) => (
+              <div key={i} className="feed-row">
+                <span className="f-time">{fmtClock(e.at)}</span>
+                <span className="f-call">{e.serverId}__{e.tool} <span className="f-client">· {e.client}</span></span>
+                <span className="f-meta">
+                  <span className={`ok-dot ${e.ok ? 'ok' : 'err'}`} title={e.ok ? 'ok' : e.error} />
+                  {e.ms}ms · {fmtBytes(e.bytesIn + e.bytesOut)}
+                </span>
+              </div>
+            ))}
+          </div></div>
+        </>
+      ) : (
+        <div className="panel" style={{ marginTop: 12 }}><div className="empty">
+          <div className="cat">📡</div>
+          <b>No calls yet.</b>
+          <div className="small" style={{ marginTop: 4, maxWidth: 380, marginInline: 'auto' }}>
+            Connect an agent to the gateway and start a server. Every tool call it makes will appear here — with the caller, latency, and data volume.
+          </div>
+        </div></div>
+      )}
+    </>
   );
 }
 
@@ -284,10 +466,10 @@ function AddServer({ entry, onClose, onAdded }: { entry: RegistryEntry | null; o
   };
 
   return (
-    <section className="card" style={{ marginTop: 14 }}>
+    <section className="panel" style={{ marginTop: 14, padding: 18 }}>
       <div className="row between">
         <b>{entry ? `Add ${entry.name}` : 'Add a custom server'}</b>
-        <button className="btn btn-ghost" onClick={onClose}>✕</button>
+        <button className="btn sm btn-ghost" onClick={onClose}>✕</button>
       </div>
       {entry && <p className="small muted" style={{ margin: '6px 0 0' }}>{entry.description}</p>}
 

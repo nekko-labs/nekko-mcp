@@ -1,9 +1,43 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import type { ManagedServerConfig, ServerState, ServerStatus } from '@nekko-mcp/shared';
+import type {
+  AnalyticsSummary,
+  ClientUsage,
+  ManagedServerConfig,
+  ServerState,
+  ServerStatus,
+  ServerUsage,
+  UsageEvent,
+} from '@nekko-mcp/shared';
 import { runtimeFor } from './runtime.js';
 
 const LOG_CAP = 500;
+/** Cap on the retained event feed (for the recent-calls feed + time series). */
+const EVENT_CAP = 2000;
+
+interface ToolAgg {
+  calls: number;
+  errors: number;
+  totalMs: number;
+}
+interface ServerAgg {
+  name: string;
+  calls: number;
+  errors: number;
+  bytesIn: number;
+  bytesOut: number;
+  totalMs: number;
+  lastUsed?: string;
+  tools: Map<string, ToolAgg>;
+  clients: Set<string>;
+}
+interface ClientAgg {
+  calls: number;
+  errors: number;
+  bytesIn: number;
+  bytesOut: number;
+  lastUsed: string;
+}
 
 interface Instance {
   config: ManagedServerConfig;
@@ -45,6 +79,15 @@ const pushLog = (i: Instance, chunk: string): void => {
 export class Supervisor {
   private instances = new Map<string, Instance>();
 
+  // ── usage analytics ────────────────────────────────────────────────────
+  // Aggregates persist for the daemon's lifetime; the event feed is a capped
+  // ring buffer (older calls roll off the feed but stay counted in aggregates).
+  private since = new Date().toISOString();
+  private events: UsageEvent[] = [];
+  private byServer = new Map<string, ServerAgg>();
+  private byClient = new Map<string, ClientAgg>();
+  private totals = { calls: 0, errors: 0, bytesIn: 0, bytesOut: 0 };
+
   list(): ServerStatus[] {
     return [...this.instances.values()].map(toStatus);
   }
@@ -62,6 +105,100 @@ export class Supervisor {
   client(id: string): Client | undefined {
     const i = this.instances.get(id);
     return i?.state === 'ready' ? i.client : undefined;
+  }
+
+  /** Record one gateway tool call for analytics. Called by the gateway. */
+  record(e: UsageEvent): void {
+    this.events.push(e);
+    if (this.events.length > EVENT_CAP) this.events.shift();
+
+    this.totals.calls += 1;
+    this.totals.bytesIn += e.bytesIn;
+    this.totals.bytesOut += e.bytesOut;
+    if (!e.ok) this.totals.errors += 1;
+
+    let s = this.byServer.get(e.serverId);
+    if (!s) {
+      s = { name: e.server, calls: 0, errors: 0, bytesIn: 0, bytesOut: 0, totalMs: 0, tools: new Map(), clients: new Set() };
+      this.byServer.set(e.serverId, s);
+    }
+    s.name = e.server || s.name;
+    s.calls += 1;
+    s.bytesIn += e.bytesIn;
+    s.bytesOut += e.bytesOut;
+    s.totalMs += e.ms;
+    s.lastUsed = e.at;
+    s.clients.add(e.client);
+    if (!e.ok) s.errors += 1;
+
+    let t = s.tools.get(e.tool);
+    if (!t) {
+      t = { calls: 0, errors: 0, totalMs: 0 };
+      s.tools.set(e.tool, t);
+    }
+    t.calls += 1;
+    t.totalMs += e.ms;
+    if (!e.ok) t.errors += 1;
+
+    let c = this.byClient.get(e.client);
+    if (!c) {
+      c = { calls: 0, errors: 0, bytesIn: 0, bytesOut: 0, lastUsed: e.at };
+      this.byClient.set(e.client, c);
+    }
+    c.calls += 1;
+    c.bytesIn += e.bytesIn;
+    c.bytesOut += e.bytesOut;
+    c.lastUsed = e.at;
+    if (!e.ok) c.errors += 1;
+  }
+
+  /** Aggregated analytics for the daemon's `/api/analytics` endpoint + the UI. */
+  analytics(recentCap = 50): AnalyticsSummary {
+    const servers: ServerUsage[] = [...this.byServer.entries()]
+      .map(([serverId, s]) => ({
+        serverId,
+        name: s.name,
+        calls: s.calls,
+        errors: s.errors,
+        bytesIn: s.bytesIn,
+        bytesOut: s.bytesOut,
+        avgMs: s.calls ? Math.round(s.totalMs / s.calls) : 0,
+        lastUsed: s.lastUsed,
+        clients: [...s.clients],
+        tools: [...s.tools.entries()]
+          .map(([tool, t]) => ({ tool, calls: t.calls, errors: t.errors, avgMs: t.calls ? Math.round(t.totalMs / t.calls) : 0 }))
+          .sort((a, b) => b.calls - a.calls),
+      }))
+      .sort((a, b) => b.calls - a.calls);
+
+    const clients: ClientUsage[] = [...this.byClient.entries()]
+      .map(([client, c]) => ({ client, calls: c.calls, errors: c.errors, bytesIn: c.bytesIn, bytesOut: c.bytesOut, lastUsed: c.lastUsed }))
+      .sort((a, b) => b.calls - a.calls);
+
+    const recent = this.events.slice(-recentCap).reverse();
+
+    // 24 hourly buckets ending at the current hour (idx 23 = this hour = "now").
+    const HOUR = 3_600_000;
+    const base = Math.floor(Date.now() / HOUR) * HOUR;
+    const buckets = new Array(24).fill(0);
+    for (const e of this.events) {
+      const eventHour = Math.floor(new Date(e.at).getTime() / HOUR) * HOUR;
+      const idx = 23 - Math.round((base - eventHour) / HOUR);
+      if (idx >= 0 && idx < 24) buckets[idx] += 1;
+    }
+    const series = buckets.map((calls, i) => ({ t: new Date(base - (23 - i) * HOUR).toISOString(), calls }));
+
+    return {
+      since: this.since,
+      totalCalls: this.totals.calls,
+      totalErrors: this.totals.errors,
+      bytesIn: this.totals.bytesIn,
+      bytesOut: this.totals.bytesOut,
+      servers,
+      clients,
+      recent,
+      series,
+    };
   }
 
   async start(config: ManagedServerConfig): Promise<ServerStatus> {

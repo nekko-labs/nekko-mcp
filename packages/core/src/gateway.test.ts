@@ -46,6 +46,23 @@ describe('Supervisor + Gateway (end-to-end via process runtime)', () => {
     await client.close();
   });
 
+  it('records the call in usage analytics (server, tool, client, bytes)', async () => {
+    const gateway = createGateway(supervisor, { name: 'gw', version: '0' }, { caller: 'test-harness 1.0' });
+    const [gwSide, clientSide] = InMemoryTransport.createLinkedPair();
+    await gateway.connect(gwSide);
+    const client = new Client({ name: 'test', version: '0' }, { capabilities: {} });
+    await client.connect(clientSide);
+    await client.callTool({ name: `echo${NS}echo`, arguments: { text: 'measure me' } });
+    await client.close();
+
+    const a = supervisor.analytics();
+    expect(a.totalCalls).toBeGreaterThan(0);
+    const echo = a.servers.find((s) => s.serverId === 'echo');
+    expect(echo?.tools.some((t) => t.tool === 'echo')).toBe(true);
+    expect(echo!.bytesIn).toBeGreaterThan(0);
+    expect(a.clients.some((c) => c.client === 'test-harness 1.0')).toBe(true);
+  });
+
   it('does not leak the host env into the sandboxed child', async () => {
     // The supervisor only forwards an allow-listed base env + declared vars,
     // so an ambient secret set in this process must not reach the child.

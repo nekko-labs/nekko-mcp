@@ -71,6 +71,85 @@ export interface RegistryEntry {
   homepage?: string;
 }
 
+/**
+ * Usage analytics — a first-class perk of routing through NekkoMCP: local,
+ * private visibility into *what* your agents actually call. Every gateway tool
+ * call becomes a UsageEvent; the daemon aggregates them per server, per tool,
+ * and per client. Nothing leaves the machine.
+ */
+
+/** One tool call routed through the gateway. Recorded, never leaves localhost. */
+export interface UsageEvent {
+  /** ISO timestamp of the call. */
+  at: string;
+  /** Owning server id and display name (name captured at call time). */
+  serverId: string;
+  server: string;
+  /** Bare tool name (the un-namespaced part of `${serverId}__${tool}`). */
+  tool: string;
+  /** Best-effort caller identity (from the MCP handshake's clientInfo). */
+  client: string;
+  /** Whether the call succeeded. */
+  ok: boolean;
+  /** Round-trip duration in milliseconds. */
+  ms: number;
+  /** Bytes of arguments sent to the server. */
+  bytesIn: number;
+  /** Bytes of result returned from the server. */
+  bytesOut: number;
+  /** Error message when `ok` is false. */
+  error?: string;
+}
+
+/** Per-tool rollup for a server. */
+export interface ToolUsage {
+  tool: string;
+  calls: number;
+  errors: number;
+  avgMs: number;
+}
+
+/** Per-client rollup across all servers. */
+export interface ClientUsage {
+  client: string;
+  calls: number;
+  errors: number;
+  bytesIn: number;
+  bytesOut: number;
+  lastUsed: string;
+}
+
+/** Per-server usage rollup. */
+export interface ServerUsage {
+  serverId: string;
+  name: string;
+  calls: number;
+  errors: number;
+  bytesIn: number;
+  bytesOut: number;
+  avgMs: number;
+  lastUsed?: string;
+  tools: ToolUsage[];
+  /** Distinct client identities that have called this server. */
+  clients: string[];
+}
+
+/** The analytics payload served at `/api/analytics`. */
+export interface AnalyticsSummary {
+  /** When usage tracking started (daemon start). */
+  since: string;
+  totalCalls: number;
+  totalErrors: number;
+  bytesIn: number;
+  bytesOut: number;
+  servers: ServerUsage[];
+  clients: ClientUsage[];
+  /** Most-recent-first, capped feed of individual calls. */
+  recent: UsageEvent[];
+  /** Hourly call-volume buckets for the last 24h (oldest → newest). */
+  series: { t: string; calls: number }[];
+}
+
 /** Daemon management API (HTTP, localhost) — request/response contracts. */
 export interface GatewayInfo {
   /** Streamable-HTTP MCP endpoint for URL-based clients. */

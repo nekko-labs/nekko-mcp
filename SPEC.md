@@ -25,10 +25,11 @@ It is **not just a connector list** — it is a proper MCP *server runtime*: it 
 1. **Standalone app** — its own UI (served by the daemon; Electron later) to add, configure, run, and monitor MCP servers; rivals ToolHive's portal.
 2. **First-class Open Paw integration** — Open Paw (already an MCP *client*) auto-detects the daemon, connects the gateway in one click, and opens this manager in a workbench pane. (Shipped natively in the open-paw repo against the daemon API; the `@nekko-mcp/ui` embeddable-package idea is parked unless a deeper embed is wanted.)
 
-**The three feelings we sell:**
+**The four feelings we sell:**
 1. **Secure by choice** — pick your isolation at setup (containers *or* sandboxed processes); we make the tradeoff explicit, never force Docker.
 2. **One endpoint** — run many servers, expose one gateway URL; paste it into any harness.
 3. **Yours, local, free** — open source (MIT), nekko-labs org; runs on your machine, no account required.
+4. **See everything** — routing through one gateway means a free, private audit trail: which tool, called by which client, how much data — visible in the Analytics tab, never leaving the machine.
 
 ### Isolation model (user-selectable at setup)
 
@@ -87,6 +88,7 @@ Journeys: add a server (from catalog or custom command/image) → choose runtime
 | Web UI | Server list with status, add-from-catalog/custom, start/stop, logs viewer, tools inspector, copy gateway URL + per-client config snippets | shipped | v0.1.0 |
 | Served by the daemon | The built UI is served at the daemon root, one port does UI + API + gateway | shipped | v0.2.0 |
 | Fresh design | Violet→cyan Nekko brand (matches Open Paw's palette era), hero gateway card with endpoint + masked token + snippet tabs (Claude Code / .mcp.json / stdio / Open Paw), status pills, catalog grid, light+dark. Branded SVG favicon (gradient rounded-square + cat mark) | shipped | v0.2.0 |
+| List-first, de-boxed redesign | **Medium** theme is the shipped default (calm mid-slate) with a topbar Light/Medium/Dark switch (persisted, no-flash). Active servers are the primary view as a clean list (hairline dividers, not per-card boxes); the gateway is a slim bar with the connect snippets behind a disclosure; the catalog moved behind **+ Add server**. Servers / Analytics tabs in the topbar | shipped | v0.3.0 |
 | Windows tray launcher | `scripts/nekko-tray.ps1` (+ `.cmd`, `npm run tray`): a system-tray/taskbar icon (GDI+ gradient cat, no .ico asset) that keeps the daemon running and offers Open manager / Restart / Quit. Interim desktop presence before the Electron shell | shipped | v0.2.0 |
 | Electron shell | Standalone cross-platform desktop app wrapping the daemon + UI | planned | later |
 
@@ -97,8 +99,18 @@ Journeys: add a server (from catalog or custom command/image) → choose runtime
 | Client config export | `.mcp.json` / client snippets for HTTP + stdio, via `/api/gateway` + the UI snippet tabs | shipped | v0.1.0 |
 | Shared `@nekko-mcp/ui` package | The UI as an embeddable package (superseded for now by the native Open Paw integration; revisit if a deeper embed is wanted) | parked | later |
 
+### 3.6 Usage analytics `[shipped]`
+The gateway is the perfect vantage point: every tool call fans through it, so we get observability for free. This is a headline reason to route through NekkoMCP rather than wiring each server into each client by hand.
+
+| Feature | Description | Status | Release |
+| --- | --- | --- | --- |
+| Call recording | The gateway records every routed tool call as a `UsageEvent` (server, tool, caller, ok/error incl. tool-level `isError`, duration, bytes in/out). Aggregated in the supervisor: per-server, per-tool, per-client totals + a capped recent-event ring buffer | shipped | v0.3.0 |
+| Caller identity | Best-effort "who called" from the MCP handshake's `clientInfo` (captured on `initialize`, attributed to the calls that follow), falling back to an `X-Client-Name` header / User-Agent; stdio callers labelled `stdio (local)`. Local heuristic — the gateway is stateless so there's no session to correlate | shipped | v0.3.0 |
+| Analytics API + tab | `/api/analytics` serves an `AnalyticsSummary`; the UI's **Analytics** tab shows headline metrics (calls, success rate, clients, data in/out), a 24h call-volume sparkline, usage-by-server (top tools, error count, latency, data), a who's-calling breakdown, and a live recent-calls feed | shipped | v0.3.0 |
+| Persistence across restarts | Persist aggregates/events to `~/.nekko-mcp` so analytics survive a daemon restart (in-memory today, resets on restart) | planned | later |
+
 ## 4. Design System & Considerations
-Nekko design language, current era: cool ink/paper neutrals, **indigo-violet `#6d5efc` accent + cyan `#22d3ee` secondary** into a violet→cyan brand gradient (matching Open Paw's palette refresh), calm/minimal, dark+light via `prefers-color-scheme`, the paw/cat mark. The UI must read as a sibling of Open Paw and Nekko Notes. Status pills: ready=success, starting=warning, errored=danger, stopped=muted. Logs are monospace, capped ring-buffer.
+Nekko design language, current era: cool ink/paper neutrals, **indigo-violet accent + cyan `#22d3ee` secondary** into a violet→cyan brand gradient (matching Open Paw's palette refresh), calm/minimal, the paw/cat mark. Three themes selectable from the topbar and driven entirely by CSS custom properties on `<html data-theme>`: **Medium** (the shipped default — a calm mid-slate), **Dark** (near-black), **Light**; the choice is persisted and applied before paint (no flash). The look is deliberately de-boxed: hairline-divided lists over stacked bordered cards. The UI must read as a sibling of Open Paw and Nekko Notes. Status pills: ready=success, starting=warning, errored=danger, stopped=muted. Logs are monospace, capped ring-buffer.
 
 ## 5. Technical Architecture & Decisions (with the *why*)
 See [`TASKS.md`](TASKS.md). Key decisions: TypeScript + npm workspaces (match the org stack so the UI can be shared with Open Paw); a long-running **daemon** (`nekko-mcpd`) as the runtime + management API + gateway; a **RuntimeAdapter** interface with `ProcessRuntime` (default) and `DockerRuntime` (opt-in) so isolation is pluggable + user-selectable; the gateway built on `@modelcontextprotocol/sdk` (client per managed server ↔ one aggregated server). Local-first, no account.

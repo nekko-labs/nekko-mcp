@@ -68,4 +68,7 @@ or stdio: `{ "mcpServers": { "nekko-mcp": { "command": "nekko-mcpd", "args": ["-
 **Open Paw** auto-detects a running daemon: Settings → MCP servers → **Connect gateway** (one click), plus an **Open manager** button that opens this UI in a workbench pane.
 
 ## Status
-Kicked off 2026-06-28. **v0.2**: process + Docker runtimes, supervisor, aggregating gateway over stdio **and** streamable HTTP (bearer token), daemon-served web UI (fresh violet/cyan design), curated catalog, Open Paw one-click integration. Next: per-client allow-lists, resources/prompts aggregation, crash backoff, keychain secrets. See `SPEC.md`/`TASKS.md`.
+Kicked off 2026-06-28. **v0.3**: process + Docker runtimes, supervisor, aggregating gateway over stdio **and** streamable HTTP (bearer token), daemon-served web UI, curated catalog, Open Paw one-click integration — plus a **list-first redesign** (Medium theme by default with a Light/Medium/Dark switch; active servers as the primary view; slim gateway bar) and **usage analytics**: every gateway call is recorded (which server, which client, how much data) and surfaced in an Analytics tab, all local. Next: per-client allow-lists, resources/prompts aggregation, crash backoff, keychain secrets, analytics persistence. See `SPEC.md`/`TASKS.md`.
+
+## Analytics — visibility for free
+Because every tool call fans through the one gateway, NekkoMCP records it: server, tool, caller (from the MCP handshake), success/error, latency, and bytes in/out. The web UI's **Analytics** tab turns that into headline metrics, a 24h call-volume sparkline, usage-by-server, a who's-calling breakdown, and a live recent-calls feed — served from `/api/analytics`. It's a private audit trail with nothing to wire up and no data leaving your machine.
