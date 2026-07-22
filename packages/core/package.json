@@ -19,7 +19,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@nekko-mcp/shared": "*",
-    "zod": "^3.23.8"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "typescript": "^5.6.0",
