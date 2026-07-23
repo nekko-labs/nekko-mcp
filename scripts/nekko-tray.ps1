@@ -18,6 +18,18 @@ $flyBin = Join-Path $env:USERPROFILE '.fly\bin'          # so catalog `flyctl` r
 $port = 7777
 $uiUrl = "http://localhost:$port/"
 
+# Service preference: open the manager UI on launch, or stay in the tray?
+# Managed from the app's Settings view; persisted in ~/.nekko-mcp/settings.json.
+$dataDir = if ($env:NEKKO_MCP_DIR) { $env:NEKKO_MCP_DIR } else { Join-Path $env:USERPROFILE '.nekko-mcp' }
+$settingsPath = Join-Path $dataDir 'settings.json'
+$startMinimized = $true
+try {
+  if (Test-Path $settingsPath) {
+    $cfg = Get-Content $settingsPath -Raw | ConvertFrom-Json
+    if ($null -ne $cfg.startMinimized) { $startMinimized = [bool]$cfg.startMinimized }
+  }
+} catch { $startMinimized = $true }
+
 function Test-Daemon {
   try {
     $r = Invoke-WebRequest -Uri "http://localhost:$port/health" -UseBasicParsing -TimeoutSec 2
@@ -97,5 +109,7 @@ $notify.ContextMenuStrip = $menu
 $notify.add_MouseDoubleClick({ Start-Process $uiUrl })
 
 Start-Daemon
+# Honor the "Start minimized" preference: when off, pop the manager UI on launch.
+if (-not $startMinimized) { Start-Process $uiUrl }
 $notify.ShowBalloonTip(2000, 'NekkoMCP', "Running - manager at $uiUrl", [System.Windows.Forms.ToolTipIcon]::Info)
 [System.Windows.Forms.Application]::Run()

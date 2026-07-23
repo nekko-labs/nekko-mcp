@@ -4,6 +4,8 @@ import { join, extname, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { auth } from '@modelcontextprotocol/sdk/client/auth.js';
@@ -15,6 +17,9 @@ import type {
   AgentClientInfo,
   AnalyticsSnapshot,
   ServerStatus,
+  DaemonSettings,
+  SettingsInfo,
+  UpdateSettingsRequest,
 } from '@nekko-mcp/shared';
 
 /**
@@ -35,6 +40,7 @@ const CONFIG_PATH = join(DATA_DIR, 'servers.json');
 const TOKEN_PATH = join(DATA_DIR, 'gateway-token');
 const ANALYTICS_PATH = join(DATA_DIR, 'analytics.json');
 const CLIENTS_PATH = join(DATA_DIR, 'clients.json');
+const SETTINGS_PATH = join(DATA_DIR, 'settings.json');
 const OAUTH_DIR = join(DATA_DIR, 'oauth');
 const PORT = Number(process.env.PORT ?? 7777);
 const VERSION = '0.5.0';
@@ -107,6 +113,81 @@ const loadToken = (): string => {
   mkdirSync(DATA_DIR, { recursive: true });
   writeFileSync(TOKEN_PATH, t);
   return t;
+};
+
+// ── desktop / service settings (autostart + tray behavior) ─────────────────
+// Preferences live in ~/.nekko-mcp/settings.json. `runOnStartup` is backed by
+// an OS autostart entry so it reflects reality even when changed outside the
+// app; `startMinimized` is read by the tray launcher (scripts/nekko-tray.ps1)
+// to decide whether to open the manager UI on launch. Windows-only for now
+// (matches the tray); a no-op that reports `startupSupported: false` elsewhere.
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
+const TRAY_PS1 = join(REPO_ROOT, 'scripts', 'nekko-tray.ps1');
+const RUN_KEY = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
+const RUN_VALUE = 'NekkoMCP';
+const STARTUP_SUPPORTED = process.platform === 'win32';
+const pexecFile = promisify(execFile);
+
+/** Run a PowerShell script via -EncodedCommand (base64/UTF-16LE) to sidestep all shell quoting. */
+const runPowerShell = async (script: string): Promise<string> => {
+  const encoded = Buffer.from(script, 'utf16le').toString('base64');
+  const { stdout } = await pexecFile('powershell', [
+    '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded,
+  ]);
+  return stdout.trim();
+};
+
+const defaultSettings = (): DaemonSettings => ({ runOnStartup: false, startMinimized: true });
+const loadSettings = (): DaemonSettings => {
+  try {
+    if (existsSync(SETTINGS_PATH)) {
+      const s = JSON.parse(readFileSync(SETTINGS_PATH, 'utf8')) as Partial<DaemonSettings>;
+      return { ...defaultSettings(), ...s };
+    }
+  } catch {
+    /* fall through to defaults */
+  }
+  return defaultSettings();
+};
+const saveSettings = (s: DaemonSettings): void => {
+  mkdirSync(DATA_DIR, { recursive: true });
+  writeFileSync(SETTINGS_PATH, JSON.stringify(s, null, 2));
+};
+
+/** Is the Windows autostart entry present? (Always false on unsupported platforms.) */
+const isStartupEnabled = async (): Promise<boolean> => {
+  if (!STARTUP_SUPPORTED) return false;
+  try {
+    const out = await runPowerShell(
+      `$p = Get-ItemProperty -Path '${RUN_KEY}' -Name '${RUN_VALUE}' -ErrorAction SilentlyContinue; if ($p) { 'yes' } else { 'no' }`,
+    );
+    return out.endsWith('yes');
+  } catch {
+    return false;
+  }
+};
+/** Add/remove the autostart entry that launches the tray hidden at login. */
+const setStartupEnabled = async (on: boolean): Promise<void> => {
+  if (!STARTUP_SUPPORTED) return;
+  if (on) {
+    const launch = `powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "${TRAY_PS1}"`;
+    await runPowerShell(
+      `New-Item -Path '${RUN_KEY}' -Force | Out-Null; Set-ItemProperty -Path '${RUN_KEY}' -Name '${RUN_VALUE}' -Value '${launch.replace(/'/g, "''")}'`,
+    );
+  } else {
+    await runPowerShell(`Remove-ItemProperty -Path '${RUN_KEY}' -Name '${RUN_VALUE}' -ErrorAction SilentlyContinue`);
+  }
+};
+
+/** The `/api/settings` payload: persisted prefs reconciled with the real OS autostart state. */
+const settingsInfo = async (): Promise<SettingsInfo> => {
+  const s = loadSettings();
+  return {
+    runOnStartup: await isStartupEnabled(),
+    startMinimized: s.startMinimized,
+    platform: process.platform,
+    startupSupported: STARTUP_SUPPORTED,
+  };
 };
 
 // ── OAuth for remote servers ───────────────────────────────────────────────
@@ -465,6 +546,24 @@ if (process.argv.includes('--stdio')) {
     }
     if (pathname === '/api/gateway') return json(res, 200, gatewayInfo());
     if (pathname === '/api/analytics') return json(res, 200, supervisor.analytics());
+
+    // ── desktop/service settings (autostart + start-minimized) ───────────────
+    if (pathname === '/api/settings' && req.method === 'GET') return json(res, 200, await settingsInfo());
+    if (pathname === '/api/settings' && req.method === 'PATCH') {
+      try {
+        const b = JSON.parse(await readBody(req)) as UpdateSettingsRequest;
+        const cur = loadSettings();
+        if (typeof b.startMinimized === 'boolean') cur.startMinimized = b.startMinimized;
+        if (typeof b.runOnStartup === 'boolean' && STARTUP_SUPPORTED) {
+          await setStartupEnabled(b.runOnStartup);
+          cur.runOnStartup = b.runOnStartup;
+        }
+        saveSettings(cur);
+        return json(res, 200, await settingsInfo());
+      } catch (e) {
+        return json(res, 400, { error: e instanceof Error ? e.message : 'invalid_json' });
+      }
+    }
 
     // ── connected agents (scoped gateway tokens) ─────────────────────────────
     if (pathname === '/api/clients' && req.method === 'GET') return json(res, 200, clients.map(agentInfo));

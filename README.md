@@ -49,7 +49,14 @@ node apps/daemon/dist/index.js --stdio   # the aggregated gateway over stdio
 npm run build && npm run tray            # tray icon in the taskbar; keeps the daemon up
 ```
 
-`scripts/nekko-tray.cmd` launches a system-tray icon (right-click for **Open manager / Restart / Quit**, double-click opens the UI). Drop a shortcut to it in your Startup folder (`Win+R` → `shell:startup`) to run it at login. A cross-platform Electron shell is planned; this is the lightweight interim.
+`scripts/nekko-tray.cmd` launches a system-tray icon (right-click for **Open manager / Restart / Quit**, double-click opens the UI). A cross-platform Electron shell is planned; this is the lightweight interim.
+
+The manager's **Settings** tab has the service options:
+
+- **Run on startup** — launches the tray automatically at login (Windows: an `HKCU\…\Run` entry). No need to place a Startup-folder shortcut by hand.
+- **Start minimized** — on launch, stay in the tray instead of opening the manager window.
+
+`npm run dev` runs the daemon + web UI together and opens the site in your browser once Vite is ready (set `NEKKO_MCP_OPEN=0` to skip).
 
 ### Deploy targets via the Fly.io server
 

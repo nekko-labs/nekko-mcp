@@ -262,6 +262,24 @@ label.field { display: flex; flex-direction: column; gap: 5px; font-size: 12px; 
 .seg button { border: none; background: none; color: var(--ink-3); font-size: 12.5px; font-weight: 500; padding: 5px 12px; border-radius: 7px; cursor: pointer; font-family: inherit; }
 .seg button.active { background: var(--card); color: var(--ink); box-shadow: var(--shadow); }
 
+/* ── settings toggles ───────────────────────────────────────────────────── */
+.setting-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.setting-text { min-width: 0; }
+.setting-label { font-weight: 600; font-size: 14px; letter-spacing: -0.2px; }
+.toggle {
+  flex: none; width: 40px; height: 23px; border-radius: 999px; padding: 0; margin: 0;
+  border: 1px solid var(--line-2); background: var(--card-2); cursor: pointer;
+  position: relative; transition: background .15s, border-color .15s;
+}
+.toggle .knob {
+  position: absolute; top: 2px; left: 2px; width: 17px; height: 17px; border-radius: 50%;
+  background: var(--ink-3); box-shadow: 0 1px 2px rgb(0 0 0 / .3); transition: transform .15s, background .15s;
+}
+.toggle.on { background: var(--grad); border-color: transparent; }
+.toggle.on .knob { transform: translateX(17px); background: #fff; }
+.toggle:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--ring); }
+.toggle:disabled { opacity: .5; cursor: default; }
+
 /* ── empty state ────────────────────────────────────────────────────────── */
 .empty { text-align: center; padding: 40px 22px; color: var(--ink-3); }
 .empty .cat { font-size: 32px; margin-bottom: 8px; }
