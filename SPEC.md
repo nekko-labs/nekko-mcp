@@ -39,11 +39,12 @@ NekkoMCP lets the user choose the runtime per install (and per server override).
 | --- | --- | --- | --- |
 | **Process sandbox** (default, no deps) | Child process: scrubbed/allow-listed env, injected secrets only, restricted CWD, resource limits (cpu/mem/file-descriptor), optional network-egress allow-list, no shell | Zero dependencies, instant start, cross-platform, lightest; great for solo/local dev | Weaker boundary than a container (shares the kernel/user); a malicious server has more reach than in a container |
 | **Docker container** (opt-in) | Container-per-server: image pinned, read-only rootfs where possible, dropped caps, network policy, CPU/mem limits, secrets via env/files | Strong isolation + reproducibility + audit; ToolHive-grade | Requires Docker installed/running; slower cold start; heavier on resources |
+| **Remote** (hosted) | No local process at all: the gateway holds an HTTP/SSE client to a provider's hosted MCP endpoint, authenticated with OAuth. Isolation is the provider's problem; the credential is an OAuth token stored locally, never a spawned command | Nothing to install or sandbox; official first-party servers (GitHub, Context7, …); one-click browser sign-in | Trusts the provider; needs network; the server's behavior is out of our hands |
 
-Default = **process sandbox** (works everywhere); **Docker** offered prominently for those who want container isolation. The choice is a setup step and overridable per server.
+Default = **process sandbox** (works everywhere); **Docker** for container isolation; **Remote** for hosted first-party servers. The choice is a setup step and overridable per server.
 
 ### Scope boundaries (deliberate)
-- **Local-first**: the runtime + gateway run on the user's machine; no account or cloud required. A hosted/team tier may come later. The daemon makes no outbound calls on its own, with one deliberate, user-initiated exception: **registry search** fetches the public MCP registry only while the user is typing a query (never on boot).
+- **Local-first**: the runtime + gateway run on the user's machine; no account or cloud required. A hosted/team tier may come later. The daemon makes no outbound calls **on its own**; the only network traffic is user-initiated: **registry search** (while the user types a query, never on boot), and **remote servers** the user adds — connecting to their hosted MCP endpoint plus the OAuth login/token exchange for those that need it. OAuth tokens are stored locally under `~/.nekko-mcp/oauth/` and nothing phones home.
 - **Harness-agnostic**: we expose a standard MCP gateway (stdio + streamable HTTP/SSE) so *any* client works; we don't lock to Open Paw.
 - Not a hosted SaaS registry (we ship a curated catalog + custom server config; community/registry sync is later).
 
@@ -61,6 +62,7 @@ Journeys: add a server (from catalog or custom command/image) → choose runtime
 | --- | --- | --- | --- |
 | Process runtime | Spawn a stdio MCP server as a sandboxed child (allow-listed env, injected secrets, restricted CWD, resource limits); capture logs; health/restart | shipped | v0.1.0 |
 | Docker runtime | Container-per-server (opt-in): pull/run image, env/secrets, caps/network/limits | shipped | v0.1.0 |
+| Remote runtime | Connect to a hosted HTTP/SSE MCP endpoint (no child process). The supervisor holds a `StreamableHTTPClientTransport` (or SSE) with an OAuth provider that attaches + refreshes the bearer token; a token-less server sits in a new `authorizing` state instead of erroring | shipped | v0.5.0 |
 | Supervisor | Start/stop/restart/remove, status (starting/ready/errored/stopped), structured logs ring-buffer | shipped | v0.1.0 |
 | Crash backoff | Auto-restart with backoff when a running server dies | planned | v0.3.0 |
 | Secrets | Per-server secrets stored locally (OS keychain when available), injected at launch, never logged | planned (file-based today, never logged/returned) | v0.3.0 |
@@ -80,6 +82,7 @@ Journeys: add a server (from catalog or custom command/image) → choose runtime
 | --- | --- | --- | --- |
 | Curated catalog | Built-in list of popular MCP servers (filesystem, github, postgres, fetch, **Fly.io** (`flyctl mcp server`), **nekko-vault-mcp**, …) with one-click add | shipped | v0.1.0 |
 | Custom server | Add by command+args+env (process) or image (docker) | shipped | v0.1.0 |
+| One-click OAuth servers | Remote first-party servers (**GitHub**, **Context7**, …) add with a single button that opens the provider's browser login — no token to paste. Built on the MCP OAuth spec (RFC 8414 metadata discovery + RFC 7591 dynamic client registration + OAuth 2.1 auth-code + PKCE), so one generic flow covers every compliant provider; adding another is a one-line catalog entry (name + url + `auth: 'oauth'`). Providers without dynamic registration (GitHub) take a pre-registered client id via `clientId` / `NEKKO_MCP_CLIENTID_<ID>`. Tokens persist under `~/.nekko-mcp/oauth/`; a `/oauth/callback` route finishes the handshake and auto-connects | shipped | v0.5.0 |
 | Registry search | Search the **official open-source MCP Registry** (`registry.modelcontextprotocol.io`) from the Add flow. The daemon fetches on-demand at `/api/registry/search` and maps each hit (npm→`npx`, pypi→`uvx`, oci→docker image, env vars→prompts) into an add-ready entry; remote-only servers are shown but flagged not-yet-runnable. This is the one deliberate outbound call the daemon makes, and only when the user searches | shipped | v0.4.0 |
 | Registry sync | Background sync / caching of the registry snapshot (beyond on-demand search) | planned | later |
 

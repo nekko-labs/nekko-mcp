@@ -1,5 +1,9 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
+import { UnauthorizedError, type OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type {
   AnalyticsSnapshot,
   AnalyticsSummary,
@@ -12,6 +16,9 @@ import type {
   UsageEvent,
 } from '@nekko-mcp/shared';
 import { runtimeFor } from './runtime.js';
+
+/** Builds the OAuth provider for a remote server, or undefined when none is needed. */
+export type AuthProviderFor = (config: ManagedServerConfig) => OAuthClientProvider | undefined;
 
 const LOG_CAP = 500;
 /** Cap on the retained event feed (for the recent-calls feed + time series). */
@@ -44,7 +51,7 @@ interface ClientAgg {
 interface Instance {
   config: ManagedServerConfig;
   client?: Client;
-  transport?: StdioClientTransport;
+  transport?: Transport;
   state: ServerState;
   tools: ToolInfo[];
   error?: string;
@@ -63,7 +70,14 @@ const toStatus = (i: Instance): ServerStatus => ({
   error: i.error,
   startedAt: i.startedAt,
   restarts: i.restarts,
+  url: i.config.url,
 });
+
+/** Heuristic: does this connect error look like an auth challenge (401/unauthorized)? */
+const is401 = (e: unknown): boolean => {
+  const msg = (e instanceof Error ? e.message : String(e)).toLowerCase();
+  return msg.includes('401') || msg.includes('unauthorized');
+};
 
 const pushLog = (i: Instance, chunk: string): void => {
   for (const line of chunk.split(/\r?\n/)) {
@@ -93,9 +107,12 @@ export class Supervisor {
   private totals = { calls: 0, errors: 0, bytesIn: 0, bytesOut: 0 };
   /** Called after every recorded call so the host can persist analytics. */
   private onUsage?: () => void;
+  /** Supplies the OAuth provider for a remote server (injected by the daemon). */
+  private authProviderFor?: AuthProviderFor;
 
-  constructor(opts: { onUsage?: () => void } = {}) {
+  constructor(opts: { onUsage?: () => void; authProviderFor?: AuthProviderFor } = {}) {
     this.onUsage = opts.onUsage;
+    this.authProviderFor = opts.authProviderFor;
   }
 
   list(): ServerStatus[] {
@@ -286,15 +303,8 @@ export class Supervisor {
     inst.state = 'starting';
     inst.error = undefined;
     try {
-      const spec = runtimeFor(config.runtime).spawnSpec(config);
-      const transport = new StdioClientTransport({
-        command: spec.command,
-        args: spec.args,
-        env: spec.env,
-        cwd: spec.cwd,
-        stderr: 'pipe',
-      });
-      transport.stderr?.on('data', (d: Buffer) => pushLog(inst!, d.toString()));
+      const transport =
+        config.runtime === 'remote' ? this.remoteTransport(config, inst) : this.stdioTransport(config, inst);
       const client = new Client({ name: 'nekko-mcp', version: '0.1.0' }, { capabilities: {} });
       await client.connect(transport);
       const { tools } = await client.listTools();
@@ -304,10 +314,59 @@ export class Supervisor {
       inst.state = 'ready';
       inst.startedAt = new Date().toISOString();
     } catch (e) {
-      inst.state = 'errored';
+      // A remote server with no (usable) OAuth token isn't a hard error — it just
+      // needs the user to sign in. Surface it as `authorizing` so the UI prompts,
+      // rather than a red `errored` the user has to decode.
+      const needsAuth = e instanceof UnauthorizedError || (config.runtime === 'remote' && is401(e));
+      inst.state = needsAuth ? 'authorizing' : 'errored';
       inst.error = e instanceof Error ? e.message : String(e);
-      pushLog(inst, `[supervisor] start failed: ${inst.error}`);
+      pushLog(inst, `[supervisor] ${needsAuth ? 'needs authorization' : 'start failed'}: ${inst.error}`);
     }
+    return toStatus(inst);
+  }
+
+  /** Local stdio child (process/docker) — the original path. */
+  private stdioTransport(config: ManagedServerConfig, inst: Instance): StdioClientTransport {
+    const spec = runtimeFor(config.runtime).spawnSpec(config);
+    const transport = new StdioClientTransport({
+      command: spec.command,
+      args: spec.args,
+      env: spec.env,
+      cwd: spec.cwd,
+      stderr: 'pipe',
+    });
+    transport.stderr?.on('data', (d: Buffer) => pushLog(inst, d.toString()));
+    return transport;
+  }
+
+  /** Hosted HTTP MCP endpoint — streamable HTTP (default) or legacy SSE, with OAuth. */
+  private remoteTransport(config: ManagedServerConfig, inst: Instance): Transport {
+    if (!config.url) throw new Error(`remote runtime needs a url for server "${config.id}"`);
+    const url = new URL(config.url);
+    const authProvider = config.auth === 'none' ? undefined : this.authProviderFor?.(config);
+    pushLog(inst, `[supervisor] connecting remote ${url.origin}${authProvider ? ' (oauth)' : ''}`);
+    return config.transport === 'sse'
+      ? new SSEClientTransport(url, { authProvider })
+      : new StreamableHTTPClientTransport(url, { authProvider });
+  }
+
+  /**
+   * Put a remote server into `authorizing` without attempting a connection —
+   * used when it has no usable OAuth token yet, so the UI can prompt sign-in
+   * and the server still shows up in `list()`. No network call happens here.
+   */
+  markAuthorizing(config: ManagedServerConfig): ServerStatus {
+    let inst = this.instances.get(config.id);
+    if (!inst) {
+      inst = { config, state: 'stopped', tools: [], restarts: 0, logs: [] };
+      this.instances.set(config.id, inst);
+    }
+    inst.config = config;
+    inst.client = undefined;
+    inst.transport = undefined;
+    inst.tools = [];
+    inst.state = 'authorizing';
+    inst.error = undefined;
     return toStatus(inst);
   }
 

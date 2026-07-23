@@ -175,6 +175,7 @@ code, .mono, pre, input.mono, textarea { font-family: 'JetBrains Mono', ui-monos
 .pill-starting { color: var(--warning); background: color-mix(in srgb, var(--warning) 16%, transparent); }
 .pill-errored { color: var(--danger); background: color-mix(in srgb, var(--danger) 16%, transparent); }
 .pill-stopped { color: var(--ink-3); background: color-mix(in srgb, var(--ink-3) 16%, transparent); }
+.pill-authorizing { color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, transparent); }
 .chip { font-size: 11px; padding: 2.5px 9px; border-radius: 999px; background: var(--card-2); color: var(--ink-2); border: 1px solid var(--line); }
 .chip.mono { font-size: 10.5px; }
 .chip-accent { background: var(--accent-soft); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }

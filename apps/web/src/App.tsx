@@ -43,6 +43,14 @@ const fmtRel = (iso?: string): string => {
 };
 const fmtClock = (iso: string): string => new Date(iso).toLocaleTimeString([], { hour12: false });
 
+/** Open a provider's OAuth sign-in in a popup window (falls back to a new tab). */
+const openAuth = (authUrl?: string): void => {
+  if (!authUrl) return;
+  window.open(authUrl, 'nekko-oauth', 'width=600,height=760,noopener');
+};
+
+const RUNTIME_CHIP: Record<string, string> = { docker: '🐳 docker', remote: '🌐 remote', process: '⚡ process' };
+
 export function App() {
   const [view, setView] = useState<View>('servers');
   const [servers, setServers] = useState<ServerStatus[] | null>(null);
@@ -81,13 +89,38 @@ export function App() {
   const running = servers?.filter((s) => s.state === 'ready').length ?? 0;
   const tools = servers?.reduce((n, s) => n + s.tools.length, 0) ?? 0;
 
+  // One-click OAuth: add the remote server and pop the provider's login. No form,
+  // no token to paste — the whole point of the feature. Falls back to /authorize
+  // if the server was already added (e.g. a half-finished earlier attempt).
+  const quickAddOAuth = useCallback(async (e: RegistryEntry) => {
+    setShowCatalog(false);
+    setAdding(null);
+    try {
+      const status = await api.add({
+        id: e.id, name: e.name, runtime: 'remote', command: '',
+        url: e.url, transport: e.transport ?? 'http', auth: 'oauth', enabled: true,
+      });
+      openAuth(status.authUrl);
+    } catch {
+      // Already added (409) or a transient error — (re)start the login instead.
+      const status = await api.authorize(e.id).catch(() => null);
+      openAuth(status?.authUrl);
+    }
+    void refresh();
+  }, [refresh]);
+
+  const handlePick = useCallback((e: RegistryEntry | 'custom') => {
+    if (e !== 'custom' && e.runtime === 'remote' && e.auth === 'oauth') { void quickAddOAuth(e); return; }
+    setAdding(e);
+  }, [quickAddOAuth]);
+
   return (
     <>
       <header className="topbar">
         <div className="topbar-in">
           <div className="logo-tile">🐾</div>
           <span className="wordmark">NekkoMCP</span>
-          <span className="chip">v0.4</span>
+          <span className="chip">v0.5</span>
           <nav className="nav">
             <button className={view === 'servers' ? 'active' : ''} onClick={() => setView('servers')}>Servers</button>
             <button className={view === 'analytics' ? 'active' : ''} onClick={() => setView('analytics')}>
@@ -152,7 +185,7 @@ export function App() {
 
             <ConnectedAgents agents={agents} servers={servers ?? []} onChange={refreshAgents} />
 
-            {showCatalog && <AddCatalog curated={registry} onPick={setAdding} />}
+            {showCatalog && <AddCatalog curated={registry} onPick={handlePick} />}
 
             {adding && (
               <AddServer
@@ -242,14 +275,26 @@ const STATE_PILL: Record<string, string> = {
   starting: 'pill-starting',
   errored: 'pill-errored',
   stopped: 'pill-stopped',
+  authorizing: 'pill-authorizing',
 };
 
 function ServerRow({ s, onChange }: { s: ServerStatus; onChange: () => void }) {
   const [logs, setLogs] = useState<string[] | null>(null);
   const [showTools, setShowTools] = useState(false);
   const busy = s.state === 'starting';
+  const isRemote = s.runtime === 'remote';
+  const authorizing = s.state === 'authorizing';
   const act = async (action: 'start' | 'stop' | 'restart') => {
     await api.action(s.id, action).catch(() => {});
+    onChange();
+  };
+  const signIn = async () => {
+    const st = await api.authorize(s.id).catch(() => null);
+    openAuth(st?.authUrl);
+    onChange();
+  };
+  const disconnect = async () => {
+    await api.disconnect(s.id).catch(() => {});
     onChange();
   };
   const toggleLogs = async () => {
@@ -262,24 +307,33 @@ function ServerRow({ s, onChange }: { s: ServerStatus; onChange: () => void }) {
         <div className="row wrap-gap">
           <span className={`pill ${STATE_PILL[s.state] ?? 'pill-stopped'}`}><span className="dot" />{s.state}</span>
           <span className="server-name">{s.name}</span>
-          <span className="chip">{s.runtime === 'docker' ? '🐳 docker' : '⚡ process'}</span>
+          <span className="chip">{RUNTIME_CHIP[s.runtime] ?? '⚡ process'}</span>
+          {isRemote && s.url && <span className="chip mono" title={s.url}>{new URL(s.url).host}</span>}
           {s.state === 'ready' && (
             <button className="link-btn" onClick={() => setShowTools(!showTools)}>{s.tools.length} tools {showTools ? '▾' : '▸'}</button>
           )}
           {s.restarts > 0 && <span className="chip">{s.restarts} restarts</span>}
         </div>
         <div className="row">
-          {s.state === 'ready' ? (
+          {authorizing ? (
+            <button className="btn sm btn-primary" onClick={() => void signIn()}>🔐 Sign in</button>
+          ) : s.state === 'ready' ? (
             <button className="btn sm" onClick={() => void act('stop')}>Stop</button>
           ) : (
             <button className="btn sm btn-primary" onClick={() => void act('start')} disabled={busy}>{busy ? 'Starting…' : 'Start'}</button>
           )}
-          <button className="btn sm" onClick={() => void act('restart')}>Restart</button>
+          {!authorizing && <button className="btn sm" onClick={() => void act('restart')}>Restart</button>}
+          {isRemote && !authorizing && <button className="btn sm" onClick={() => void disconnect()} title="Sign out and drop stored tokens">Disconnect</button>}
           <button className="btn sm" onClick={() => void toggleLogs()}>Logs</button>
           <button className="btn sm btn-danger" onClick={() => { void api.remove(s.id).then(onChange); }}>Remove</button>
         </div>
       </div>
-      {s.error && <p className="small" style={{ color: 'var(--danger)', margin: '8px 0 0' }}>{s.error}</p>}
+      {authorizing && (
+        <p className="small muted" style={{ margin: '8px 0 0' }}>
+          Waiting for sign-in. Click <b>Sign in</b> to open {s.name}'s login in a new window — it connects automatically once you authorize.
+        </p>
+      )}
+      {s.error && !authorizing && <p className="small" style={{ color: 'var(--danger)', margin: '8px 0 0' }}>{s.error}</p>}
       {showTools && s.tools.length > 0 && (
         <ToolList serverId={s.id} tools={s.toolDetails ?? s.tools.map((name) => ({ name }))} />
       )}
@@ -552,13 +606,15 @@ function AddServer({ entry, onClose, onAdded }: { entry: RegistryEntry | null; o
 /** One catalog row (curated or registry-search result) with an Add button. */
 function CatalogRow({ e, onPick }: { e: RegistryEntry; onPick: (e: RegistryEntry) => void }) {
   const runnable = e.runnable !== false;
+  const oauth = e.runtime === 'remote' && e.auth === 'oauth';
   return (
     <div className="list-row">
       <div className="row between wrap-gap">
         <div style={{ flex: 1, minWidth: 200 }}>
           <div className="row" style={{ gap: 8 }}>
             <span className="server-name">{e.name}</span>
-            <span className="chip">{e.runtime === 'docker' ? '🐳 docker' : '⚡ process'}</span>
+            <span className="chip">{RUNTIME_CHIP[e.runtime] ?? '⚡ process'}</span>
+            {oauth && <span className="chip chip-accent">🔐 OAuth</span>}
             {e.source === 'registry' && <span className="chip chip-accent">registry</span>}
             {(e.requires ?? []).map((r) => <span key={r} className="chip mono">{r}</span>)}
           </div>
@@ -567,7 +623,9 @@ function CatalogRow({ e, onPick }: { e: RegistryEntry; onPick: (e: RegistryEntry
         </div>
         <div className="row">
           {e.homepage && <a className="small muted" href={e.homepage} target="_blank" rel="noreferrer">docs</a>}
-          <button className="btn" onClick={() => onPick(e)} disabled={!runnable} title={runnable ? '' : e.note ?? 'Not locally runnable'}>+ Add</button>
+          <button className={`btn ${oauth ? 'btn-primary' : ''}`} onClick={() => onPick(e)} disabled={!runnable} title={runnable ? '' : e.note ?? 'Not locally runnable'}>
+            {oauth ? '🔐 Sign in & add' : '+ Add'}
+          </button>
         </div>
       </div>
     </div>

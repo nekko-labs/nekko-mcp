@@ -19,7 +19,32 @@ export const REGISTRY: RegistryEntry[] = [
   {
     id: 'github',
     name: 'GitHub',
-    description: 'Search repos/issues/PRs and read code via the GitHub API.',
+    description: 'Official remote GitHub MCP server: repos, issues, PRs, code, Actions. Browser sign-in — no token to paste.',
+    runtime: 'remote',
+    command: '',
+    url: 'https://api.githubcopilot.com/mcp/',
+    transport: 'http',
+    auth: 'oauth',
+    // GitHub's OAuth server has no dynamic client registration, so it needs a
+    // pre-registered app id. Set NEKKO_MCP_CLIENTID_GITHUB (or the entry's clientId).
+    note: 'Needs a registered GitHub OAuth app id (set NEKKO_MCP_CLIENTID_GITHUB) — GitHub has no automatic app registration.',
+    homepage: 'https://github.com/github/github-mcp-server',
+  },
+  {
+    id: 'context7',
+    name: 'Context7',
+    description: 'Up-to-date, version-specific docs and code examples for any library, injected into your prompts. One-click browser sign-in.',
+    runtime: 'remote',
+    command: '',
+    url: 'https://mcp.context7.com/mcp/oauth',
+    transport: 'http',
+    auth: 'oauth',
+    homepage: 'https://context7.com',
+  },
+  {
+    id: 'github-pat',
+    name: 'GitHub (token)',
+    description: 'Local GitHub server via a personal access token — the offline/self-hosted alternative to the OAuth entry.',
     runtime: 'process',
     command: 'npx',
     args: ['-y', '@modelcontextprotocol/server-github'],
