@@ -5,6 +5,8 @@ import type {
   ManagedServerConfig,
   AnalyticsSummary,
   AgentClientInfo,
+  SettingsInfo,
+  UpdateSettingsRequest,
 } from '@nekko-mcp/shared';
 
 // Dev proxies /api → daemon; in a packaged build set VITE_DAEMON_URL.
@@ -34,4 +36,7 @@ export const api = {
   updateClient: (id: string, patch: { name?: string; servers?: '*' | string[] }) =>
     j<AgentClientInfo>(`/api/clients/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }),
   removeClient: (id: string) => j<{ ok: boolean }>(`/api/clients/${id}`, { method: 'DELETE' }),
+  settings: () => j<SettingsInfo>('/api/settings'),
+  updateSettings: (patch: UpdateSettingsRequest) =>
+    j<SettingsInfo>('/api/settings', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }),
 };

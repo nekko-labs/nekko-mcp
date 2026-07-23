@@ -291,6 +291,34 @@ export interface AgentClientInfo extends AgentClient {
   clientSnippet: Record<string, unknown>;
 }
 
+/**
+ * Desktop/service preferences for the local daemon. Persisted in
+ * `~/.nekko-mcp/settings.json`. `runOnStartup` is backed by an OS autostart
+ * entry (Windows: an HKCU `…\Run` value launching the tray hidden);
+ * `startMinimized` is read by the tray launcher to decide whether to open the
+ * manager UI on launch or just sit in the notification area.
+ */
+export interface DaemonSettings {
+  /** Launch NekkoMCP automatically when the user signs in. */
+  runOnStartup: boolean;
+  /** Stay in the tray on launch instead of opening the manager UI. */
+  startMinimized: boolean;
+}
+
+/** `/api/settings` payload: the settings plus what this platform can actually do. */
+export interface SettingsInfo extends DaemonSettings {
+  /** Host platform, e.g. `win32` / `darwin` / `linux`. */
+  platform: string;
+  /** Whether OS autostart integration is wired up on this platform (Windows for now). */
+  startupSupported: boolean;
+}
+
+/** Request body to update settings (partial). */
+export interface UpdateSettingsRequest {
+  runOnStartup?: boolean;
+  startMinimized?: boolean;
+}
+
 /** Daemon management API (HTTP, localhost) — request/response contracts. */
 export interface GatewayInfo {
   /** Streamable-HTTP MCP endpoint for URL-based clients. */

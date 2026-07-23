@@ -8,10 +8,12 @@ import type {
   AnalyticsSummary,
   ToolInfo,
   AgentClientInfo,
+  SettingsInfo,
+  UpdateSettingsRequest,
 } from '@nekko-mcp/shared';
 import { api } from './api';
 
-type View = 'servers' | 'analytics';
+type View = 'servers' | 'analytics' | 'settings';
 type Theme = 'light' | 'medium' | 'dark';
 
 function useCopy(): [string | null, (key: string, text: string) => void] {
@@ -126,6 +128,7 @@ export function App() {
             <button className={view === 'analytics' ? 'active' : ''} onClick={() => setView('analytics')}>
               Analytics{stats && stats.totalCalls > 0 && <span className="n-badge">{fmtNum(stats.totalCalls)}</span>}
             </button>
+            <button className={view === 'settings' ? 'active' : ''} onClick={() => setView('settings')}>Settings</button>
           </nav>
           <div className="spacer" />
           <ThemeSwitch />
@@ -195,8 +198,10 @@ export function App() {
               />
             )}
           </>
-        ) : (
+        ) : view === 'analytics' ? (
           <AnalyticsView stats={stats} />
+        ) : (
+          <SettingsView />
         )}
 
         <div className="footer">
@@ -396,6 +401,96 @@ function SchemaParams({ schema }: { schema: unknown }) {
         );
       })}
     </div>
+  );
+}
+
+/** A labeled on/off switch row. */
+function ToggleRow({
+  label, desc, checked, disabled, onChange,
+}: { label: string; desc: string; checked: boolean; disabled?: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <div className="list-row setting-row">
+      <div className="setting-text">
+        <div className="setting-label">{label}</div>
+        <div className="small muted">{desc}</div>
+      </div>
+      <button
+        role="switch"
+        aria-checked={checked}
+        aria-label={label}
+        className={`toggle ${checked ? 'on' : ''}`}
+        disabled={disabled}
+        onClick={() => onChange(!checked)}
+      >
+        <span className="knob" />
+      </button>
+    </div>
+  );
+}
+
+/** Service/desktop options: run at login, start minimized. Talks to /api/settings. */
+function SettingsView() {
+  const [s, setS] = useState<SettingsInfo | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    void api.settings().then(setS).catch(() => setErr('Could not load settings — is the daemon running?'));
+  }, []);
+
+  const update = async (patch: UpdateSettingsRequest, key: string) => {
+    setBusy(key);
+    setErr(null);
+    try {
+      setS(await api.updateSettings(patch));
+    } catch {
+      setErr('Could not save the setting, check the daemon logs.');
+    }
+    setBusy(null);
+  };
+
+  return (
+    <>
+      <div className="pagehead">
+        <div>
+          <h1><span className="grad-text">Settings</span></h1>
+          <p>How NekkoMCP runs on this machine. Local-first — these only affect your own device.</p>
+        </div>
+      </div>
+
+      <div className="section-title">Startup &amp; desktop</div>
+      <div className="panel">
+        {!s ? (
+          <div className="list-row small muted">Loading…</div>
+        ) : (
+          <div className="list">
+            <ToggleRow
+              label="Run on startup"
+              desc={
+                s.startupSupported
+                  ? 'Launch NekkoMCP in the tray automatically when you sign in to Windows.'
+                  : `Autostart isn't wired up on ${s.platform} yet — it's coming with the desktop shell.`
+              }
+              checked={s.runOnStartup}
+              disabled={!s.startupSupported || busy === 'runOnStartup'}
+              onChange={(v) => void update({ runOnStartup: v }, 'runOnStartup')}
+            />
+            <ToggleRow
+              label="Start minimized"
+              desc="Stay in the system tray on launch instead of opening the manager window."
+              checked={s.startMinimized}
+              disabled={busy === 'startMinimized'}
+              onChange={(v) => void update({ startMinimized: v }, 'startMinimized')}
+            />
+          </div>
+        )}
+      </div>
+      {err && <p className="small" style={{ color: 'var(--danger)', marginTop: 10 }}>{err}</p>}
+      <p className="small muted" style={{ marginTop: 12 }}>
+        Startup launches the tray app, which keeps the daemon running in the background. Right-click the tray icon for
+        Open manager / Restart / Quit.
+      </p>
+    </>
   );
 }
 
