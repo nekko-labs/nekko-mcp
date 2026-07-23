@@ -164,7 +164,7 @@ export function App() {
             <div className="section-title">
               Active servers
               <span className="rt">
-                <button className="btn sm" onClick={() => { setShowCatalog((v) => !v); setAdding(null); }}>
+                <button className={`btn sm ${showCatalog ? '' : 'btn-accent'}`} onClick={() => { setShowCatalog((v) => !v); setAdding(null); }}>
                   {showCatalog ? 'Close' : '+ Add server'}
                 </button>
               </span>
@@ -248,7 +248,7 @@ function GatewayBar({ gateway }: { gateway: GatewayInfo }) {
         <span className="tok">token {showToken ? token.slice(0, 12) + '…' : '••••••'}</span>
         <button className="btn sm btn-ghost" onClick={() => setShowToken(!showToken)}>{showToken ? 'Hide' : 'Show'}</button>
         <button className="btn sm" onClick={() => copy('token', token)}>{copied === 'token' ? 'Copied!' : 'Copy'}</button>
-        <button className="btn sm" onClick={() => setOpen(!open)}>Connect an agent {open ? '▴' : '▾'}</button>
+        <button className={`btn sm ${open ? '' : 'btn-accent'}`} onClick={() => setOpen(!open)}>Connect an agent {open ? '▴' : '▾'}</button>
       </div>
       {open && (
         <div className="connect-panel">
@@ -318,12 +318,12 @@ function ServerRow({ s, onChange }: { s: ServerStatus; onChange: () => void }) {
           {authorizing ? (
             <button className="btn sm btn-primary" onClick={() => void signIn()}>🔐 Sign in</button>
           ) : s.state === 'ready' ? (
-            <button className="btn sm" onClick={() => void act('stop')}>Stop</button>
+            <button className="btn sm btn-warn" onClick={() => void act('stop')}>Stop</button>
           ) : (
-            <button className="btn sm btn-primary" onClick={() => void act('start')} disabled={busy}>{busy ? 'Starting…' : 'Start'}</button>
+            <button className="btn sm btn-go" onClick={() => void act('start')} disabled={busy}>{busy ? 'Starting…' : 'Start'}</button>
           )}
-          {!authorizing && <button className="btn sm" onClick={() => void act('restart')}>Restart</button>}
-          {isRemote && !authorizing && <button className="btn sm" onClick={() => void disconnect()} title="Sign out and drop stored tokens">Disconnect</button>}
+          {!authorizing && <button className="btn sm btn-warn" onClick={() => void act('restart')}>Restart</button>}
+          {isRemote && !authorizing && <button className="btn sm btn-warn" onClick={() => void disconnect()} title="Sign out and drop stored tokens">Disconnect</button>}
           <button className="btn sm" onClick={() => void toggleLogs()}>Logs</button>
           <button className="btn sm btn-danger" onClick={() => { void api.remove(s.id).then(onChange); }}>Remove</button>
         </div>
@@ -710,7 +710,7 @@ function ConnectedAgents({ agents, servers, onChange }: { agents: AgentClientInf
       <div className="section-title" style={{ marginTop: 22 }}>
         Connected agents
         <span className="rt">
-          <button className="btn sm" onClick={() => setEditing(editing === 'new' ? null : 'new')}>
+          <button className={`btn sm ${editing === 'new' ? '' : 'btn-accent'}`} onClick={() => setEditing(editing === 'new' ? null : 'new')}>
             {editing === 'new' ? 'Close' : '+ Add agent'}
           </button>
         </span>
