@@ -6,13 +6,15 @@ import { homedir } from 'node:os';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { Supervisor, createGateway, REGISTRY, searchRegistry } from '@nekko-mcp/core';
+import { auth } from '@modelcontextprotocol/sdk/client/auth.js';
+import { Supervisor, createGateway, REGISTRY, searchRegistry, NekkoOAuthProvider, type OAuthStore } from '@nekko-mcp/core';
 import type {
   ManagedServerConfig,
   GatewayInfo,
   AgentClient,
   AgentClientInfo,
   AnalyticsSnapshot,
+  ServerStatus,
 } from '@nekko-mcp/shared';
 
 /**
@@ -23,15 +25,21 @@ import type {
  *     (Claude Code, Cursor, Open Paw) can spawn `nekko-mcpd --stdio` as ONE
  *     MCP endpoint that fans out to all enabled servers.
  *
- * Local-first: binds to localhost; the daemon makes no network calls itself.
+ * Local-first: binds to localhost. The daemon makes outbound calls only for
+ * user-initiated actions — registry search, and connecting to the remote MCP
+ * servers a user adds (plus their OAuth login/token exchange). OAuth tokens are
+ * stored locally under ~/.nekko-mcp/oauth/ and nothing phones home on its own.
  */
 const DATA_DIR = process.env.NEKKO_MCP_DIR ?? join(homedir(), '.nekko-mcp');
 const CONFIG_PATH = join(DATA_DIR, 'servers.json');
 const TOKEN_PATH = join(DATA_DIR, 'gateway-token');
 const ANALYTICS_PATH = join(DATA_DIR, 'analytics.json');
 const CLIENTS_PATH = join(DATA_DIR, 'clients.json');
+const OAUTH_DIR = join(DATA_DIR, 'oauth');
 const PORT = Number(process.env.PORT ?? 7777);
-const VERSION = '0.4.0';
+const VERSION = '0.5.0';
+/** Where OAuth providers send the user back after the browser login. */
+const OAUTH_REDIRECT = `http://localhost:${PORT}/oauth/callback`;
 
 const loadConfig = (): ManagedServerConfig[] => {
   try {
@@ -101,15 +109,105 @@ const loadToken = (): string => {
   return t;
 };
 
+// ── OAuth for remote servers ───────────────────────────────────────────────
+// Each remote server's OAuth state (registered client, tokens, PKCE verifier,
+// CSRF state) lives in one JSON file under ~/.nekko-mcp/oauth/. The provider is
+// store-backed (see @nekko-mcp/core) so the daemon owns all the filesystem IO.
+const oauthFile = (id: string): string => join(OAUTH_DIR, `${encodeURIComponent(id)}.json`);
+const readOAuth = (id: string): Record<string, string> => {
+  try {
+    if (existsSync(oauthFile(id))) return JSON.parse(readFileSync(oauthFile(id), 'utf8')) as Record<string, string>;
+  } catch {
+    /* corrupt file → start fresh */
+  }
+  return {};
+};
+const fileStore = (id: string): OAuthStore => ({
+  load: (key) => readOAuth(id)[key],
+  save: (key, value) => {
+    mkdirSync(OAUTH_DIR, { recursive: true });
+    writeFileSync(oauthFile(id), JSON.stringify({ ...readOAuth(id), [key]: value }, null, 2));
+  },
+  remove: (key) => {
+    const o = readOAuth(id);
+    delete o[key];
+    if (existsSync(oauthFile(id))) writeFileSync(oauthFile(id), JSON.stringify(o, null, 2));
+  },
+});
+/**
+ * A pre-registered OAuth client id for a provider that lacks dynamic registration
+ * (e.g. GitHub). Resolved from the server config, or from an env var so it can be
+ * set without a rebuild: `NEKKO_MCP_CLIENTID_GITHUB=Iv1...`.
+ */
+const clientIdEnv = (id: string): string | undefined =>
+  process.env[`NEKKO_MCP_CLIENTID_${id.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`];
+const resolvedClientId = (cfg: ManagedServerConfig): string | undefined => cfg.clientId || clientIdEnv(cfg.id);
+const makeProvider = (cfg: ManagedServerConfig): NekkoOAuthProvider =>
+  new NekkoOAuthProvider(fileStore(cfg.id), {
+    redirectUrl: OAUTH_REDIRECT,
+    clientName: 'NekkoMCP',
+    clientId: resolvedClientId(cfg),
+    scope: cfg.scope,
+  });
+/** A remote server that uses OAuth and has no usable token yet needs the user to sign in. */
+const needsAuth = (cfg: ManagedServerConfig): boolean =>
+  cfg.runtime === 'remote' && cfg.auth !== 'none' && !makeProvider(cfg).hasTokens();
+
 // Set to a debounced disk writer in HTTP mode; stays a no-op in stdio mode so a
 // transient `--stdio` spawn never clobbers the resident daemon's analytics file.
 let persistAnalytics: () => void = () => {};
-const supervisor = new Supervisor({ onUsage: () => persistAnalytics() });
+const supervisor = new Supervisor({
+  onUsage: () => persistAnalytics(),
+  // The supervisor connects remote servers with this provider (attaches + refreshes
+  // the bearer token); the interactive login is driven by the daemon's OAuth routes.
+  authProviderFor: (cfg) => (cfg.runtime === 'remote' && cfg.auth !== 'none' ? makeProvider(cfg) : undefined),
+});
 let servers = loadConfig();
 
 const startEnabled = async (): Promise<void> => {
-  for (const s of servers) if (s.enabled) await supervisor.start(s);
+  for (const s of servers) {
+    if (!s.enabled) continue;
+    // Don't attempt a token-less remote connect — just surface it as authorizing.
+    if (needsAuth(s)) supervisor.markAuthorizing(s);
+    else await supervisor.start(s);
+  }
 };
+
+/**
+ * Drive the MCP OAuth flow for a remote server. Returns `{ authorized }` when
+ * tokens already exist (or were just minted), otherwise `{ authUrl }` — the
+ * browser URL the user must open to sign in. `authorizationCode` completes the
+ * exchange on the callback.
+ */
+const runOAuth = async (
+  cfg: ManagedServerConfig,
+  authorizationCode?: string,
+): Promise<{ authorized: boolean; authUrl?: string; error?: string }> => {
+  const provider = makeProvider(cfg);
+  try {
+    if (authorizationCode) {
+      const done = await auth(provider, { serverUrl: cfg.url ?? '', authorizationCode });
+      if (done !== 'AUTHORIZED') return { authorized: false, error: 'token exchange did not complete' };
+      provider.clearFlowState();
+      return { authorized: true };
+    }
+    // Fresh authorize: clear any stale PKCE/state so we always start clean.
+    provider.clearFlowState();
+    const result = await auth(provider, { serverUrl: cfg.url ?? '' });
+    if (result === 'AUTHORIZED') return { authorized: true };
+    return { authorized: false, authUrl: provider.lastAuthorizationUrl() };
+  } catch (e) {
+    let msg = e instanceof Error ? e.message : String(e);
+    // The common gotcha: the provider needs a pre-registered client id.
+    if (/dynamic client registration/i.test(msg) && !resolvedClientId(cfg))
+      msg = `${cfg.name} doesn't support automatic app registration — it needs a pre-registered OAuth client id. Register an app (callback ${OAUTH_REDIRECT}) and set NEKKO_MCP_CLIENTID_${cfg.id.toUpperCase().replace(/[^A-Z0-9]/g, '_')}.`;
+    return { authorized: false, error: msg };
+  }
+};
+
+/** Find the managed remote server whose live OAuth flow used this CSRF `state`. */
+const serverForState = (state: string): ManagedServerConfig | undefined =>
+  servers.find((s) => s.runtime === 'remote' && fileStore(s.id).load('state') === state);
 
 // ── stdio gateway mode (the single aggregated endpoint for harnesses) ──────
 if (process.argv.includes('--stdio')) {
@@ -147,6 +245,21 @@ if (process.argv.includes('--stdio')) {
   const json = (res: ServerResponse, status: number, body: unknown): void => {
     res.writeHead(status, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
     res.end(JSON.stringify(body));
+  };
+  // A minimal self-contained result page shown in the OAuth popup after sign-in.
+  const oauthPage = (res: ServerResponse, ok: boolean, message: string): void => {
+    const esc = (s: string): string => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
+    res.writeHead(ok ? 200 : 400, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(`<!doctype html><html><head><meta charset="utf-8"><title>NekkoMCP · ${ok ? 'Connected' : 'Sign-in failed'}</title>
+<style>:root{color-scheme:light dark}body{margin:0;min-height:100vh;display:grid;place-items:center;font:15px/1.5 system-ui,sans-serif;background:#0f1117;color:#e7e9ee}
+.card{max-width:420px;padding:32px 34px;border-radius:16px;background:#171a23;border:1px solid #262b38;text-align:center}
+.mark{font-size:38px}.h{font-size:19px;font-weight:600;margin:14px 0 6px;background:linear-gradient(90deg,#8b5cf6,#22d3ee);-webkit-background-clip:text;background-clip:text;color:transparent}
+.m{color:#aab0be}.ok{color:#34d399}.err{color:#f87171}</style></head>
+<body><div class="card"><div class="mark">${ok ? '🐾' : '⚠️'}</div>
+<div class="h">${ok ? 'Connected' : 'Sign-in failed'}</div>
+<p class="m ${ok ? 'ok' : 'err'}">${esc(message)}</p>
+<p class="m">This window can be closed.</p></div>
+<script>setTimeout(function(){window.close()}, ${ok ? 1500 : 6000})</script></body></html>`);
   };
   const readBody = (req: IncomingMessage): Promise<string> =>
     new Promise((resolve) => {
@@ -305,6 +418,26 @@ if (process.argv.includes('--stdio')) {
       return;
     }
 
+    // ── OAuth callback: the provider redirects the browser back here ──────────
+    if (pathname === '/oauth/callback') {
+      const code = url.searchParams.get('code');
+      const state = url.searchParams.get('state');
+      const oauthErr = url.searchParams.get('error');
+      if (oauthErr) return oauthPage(res, false, `Authorization was denied (${oauthErr}).`);
+      if (!code || !state) return oauthPage(res, false, 'Missing authorization code or state.');
+      const cfg = serverForState(state);
+      if (!cfg) return oauthPage(res, false, 'Unknown or expired authorization request. Try adding the server again.');
+      const result = await runOAuth(cfg, code);
+      if (!result.authorized) return oauthPage(res, false, `Could not complete sign-in: ${result.error ?? 'unknown error'}`);
+      const live = servers.find((s) => s.id === cfg.id);
+      if (live) {
+        live.enabled = true;
+        saveConfig(servers);
+        await supervisor.start(live);
+      }
+      return oauthPage(res, true, `${cfg.name} is connected. You can close this tab and return to NekkoMCP.`);
+    }
+
     if (pathname === '/health') return json(res, 200, { ok: true, service: 'nekko-mcpd', version: VERSION, servers: supervisor.list().length });
     if (pathname === '/api/registry') return json(res, 200, REGISTRY);
 
@@ -374,14 +507,34 @@ if (process.argv.includes('--stdio')) {
     if (pathname === '/api/servers' && req.method === 'POST') {
       try {
         const cfg = JSON.parse(await readBody(req)) as ManagedServerConfig;
-        // A process server needs a command; a docker server needs an image (its
-        // entrypoint runs when no command is given), so require one of the two.
-        if (!cfg.id || !cfg.name || (!cfg.command && !cfg.image)) return json(res, 400, { error: 'id, name, and a command or image required' });
+        cfg.runtime = cfg.runtime === 'docker' ? 'docker' : cfg.runtime === 'remote' ? 'remote' : 'process';
+        const isRemote = cfg.runtime === 'remote';
+        // Remote needs a url; a process server needs a command; a docker server
+        // needs an image (its entrypoint runs when no command is given).
+        if (!cfg.id || !cfg.name || (isRemote ? !cfg.url : !cfg.command && !cfg.image))
+          return json(res, 400, { error: isRemote ? 'id, name, and url required' : 'id, name, and a command or image required' });
         if (servers.some((s) => s.id === cfg.id)) return json(res, 409, { error: 'id_exists' });
-        cfg.runtime = cfg.runtime === 'docker' ? 'docker' : 'process';
         cfg.enabled = cfg.enabled ?? true;
+        if (isRemote) {
+          cfg.command = cfg.command ?? '';
+          cfg.transport = cfg.transport === 'sse' ? 'sse' : 'http';
+          cfg.auth = cfg.auth === 'none' ? 'none' : 'oauth';
+        }
         servers.push(cfg);
         saveConfig(servers);
+
+        // Remote + OAuth: kick off the browser flow. If tokens already exist
+        // (re-add), connect straight away; otherwise return the sign-in URL.
+        if (isRemote && cfg.auth === 'oauth') {
+          const result = await runOAuth(cfg);
+          if (result.authorized) {
+            await supervisor.start(cfg);
+            return json(res, 200, supervisor.status(cfg.id));
+          }
+          supervisor.markAuthorizing(cfg);
+          return json(res, 200, { ...supervisor.status(cfg.id), authUrl: result.authUrl, error: result.error } as ServerStatus);
+        }
+
         if (cfg.enabled) await supervisor.start(cfg);
         return json(res, 200, supervisor.status(cfg.id) ?? { id: cfg.id, state: 'stopped' });
       } catch {
@@ -401,6 +554,38 @@ if (process.argv.includes('--stdio')) {
       return json(res, 200, { ok: true });
     }
 
+    // (re)start the OAuth login for a remote server — returns { authUrl } to open,
+    // or the ready status if tokens already existed and the server connected.
+    const authM = /^\/api\/servers\/([^/]+)\/authorize$/.exec(pathname);
+    if (authM && req.method === 'POST') {
+      const cfg = servers.find((s) => s.id === authM[1]);
+      if (!cfg) return json(res, 404, { error: 'not_found' });
+      if (cfg.runtime !== 'remote') return json(res, 400, { error: 'not a remote server' });
+      cfg.auth = cfg.auth === 'none' ? 'none' : 'oauth';
+      const result = await runOAuth(cfg);
+      if (result.authorized) {
+        cfg.enabled = true;
+        saveConfig(servers);
+        await supervisor.start(cfg);
+        return json(res, 200, supervisor.status(cfg.id));
+      }
+      supervisor.markAuthorizing(cfg);
+      return json(res, 200, { ...supervisor.status(cfg.id), authUrl: result.authUrl, error: result.error } as ServerStatus);
+    }
+
+    // disconnect: sign out (drop stored OAuth tokens) and stop the server.
+    const discM = /^\/api\/servers\/([^/]+)\/disconnect$/.exec(pathname);
+    if (discM && req.method === 'POST') {
+      const cfg = servers.find((s) => s.id === discM[1]);
+      if (!cfg) return json(res, 404, { error: 'not_found' });
+      await supervisor.stop(cfg.id);
+      makeProvider(cfg).invalidateCredentials('all');
+      cfg.enabled = false;
+      saveConfig(servers);
+      supervisor.markAuthorizing(cfg);
+      return json(res, 200, supervisor.status(cfg.id));
+    }
+
     const m = /^\/api\/servers\/([^/]+)\/(start|stop|restart)$/.exec(pathname);
     if (m && req.method === 'POST') {
       const [, id, action] = m;
@@ -409,6 +594,9 @@ if (process.argv.includes('--stdio')) {
       cfg.enabled = action !== 'stop';
       saveConfig(servers);
       if (action === 'stop') await supervisor.stop(id);
+      // A remote server that still needs sign-in can't be started by the generic
+      // Start/Restart button — surface it as authorizing so the UI prompts login.
+      else if (needsAuth(cfg)) supervisor.markAuthorizing(cfg);
       else if (action === 'restart') await supervisor.restart(cfg);
       else await supervisor.start(cfg);
       return json(res, 200, supervisor.status(id));

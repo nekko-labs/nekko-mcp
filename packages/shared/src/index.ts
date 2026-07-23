@@ -7,19 +7,35 @@
  * connects an MCP client to it; the gateway aggregates all of them.
  */
 
-/** How a server is isolated when it runs. User-selectable at setup + per-server. */
-export type RuntimeKind = 'process' | 'docker';
+/**
+ * How a server runs / is isolated. `process` + `docker` are local stdio children
+ * (user-selectable isolation). `remote` connects to a hosted HTTP MCP endpoint
+ * (no child process); its credential is an OAuth token, not a spawned command.
+ */
+export type RuntimeKind = 'process' | 'docker' | 'remote';
 
-/** Lifecycle state of a managed server. */
-export type ServerState = 'stopped' | 'starting' | 'ready' | 'errored';
+/** Transport for a `remote` server. Streamable HTTP (default) or legacy SSE. */
+export type RemoteTransport = 'http' | 'sse';
+
+/** How a `remote` server authenticates. `oauth` = the MCP browser OAuth flow. */
+export type RemoteAuth = 'oauth' | 'none';
+
+/**
+ * Lifecycle state of a managed server. `authorizing` is remote-only: the server
+ * is waiting for the user to finish the browser OAuth login before it can connect.
+ */
+export type ServerState = 'stopped' | 'starting' | 'ready' | 'errored' | 'authorizing';
 
 /** A server NekkoMCP manages. Persisted in the daemon's config. */
 export interface ManagedServerConfig {
   id: string;
   name: string;
-  /** Isolation runtime; defaults to the install's setup choice. */
+  /** Isolation/connection runtime; defaults to the install's setup choice. */
   runtime: RuntimeKind;
-  /** The server's launch command (process runtime) or the in-container command (docker). */
+  /**
+   * The server's launch command (process runtime) or the in-container command
+   * (docker). Not used by the `remote` runtime — leave empty and set `url`.
+   */
   command: string;
   args?: string[];
   /** Non-secret env passed through (allow-listed). */
@@ -30,6 +46,20 @@ export interface ManagedServerConfig {
   cwd?: string;
   /** Container image (docker runtime). */
   image?: string;
+  /** Remote HTTP MCP endpoint (remote runtime), e.g. `https://api.githubcopilot.com/mcp/`. */
+  url?: string;
+  /** Transport for a remote server; defaults to `http` (streamable HTTP). */
+  transport?: RemoteTransport;
+  /** How a remote server authenticates; defaults to `oauth` when a remote entry omits it. */
+  auth?: RemoteAuth;
+  /**
+   * Pre-registered OAuth client id (public client + PKCE). Required for providers
+   * that don't support dynamic client registration (e.g. GitHub); when set, the
+   * OAuth flow skips registration and uses this id. Left empty for DCR providers.
+   */
+  clientId?: string;
+  /** Optional OAuth scope to request (space-delimited), when the provider needs it. */
+  scope?: string;
   /** Whether the supervisor should run it. */
   enabled: boolean;
 }
@@ -69,6 +99,13 @@ export interface ServerStatus {
   error?: string;
   startedAt?: string;
   restarts: number;
+  /** Remote endpoint (remote runtime), surfaced for display. */
+  url?: string;
+  /**
+   * Browser authorization URL to open when `state === 'authorizing'`. Present
+   * only transiently, right after an OAuth flow is (re)started for this server.
+   */
+  authUrl?: string;
 }
 
 /** A curated/known server users can add in one click. */
@@ -81,6 +118,16 @@ export interface RegistryEntry {
   command: string;
   args?: string[];
   image?: string;
+  /** Remote HTTP MCP endpoint (remote runtime). */
+  url?: string;
+  /** Transport for a remote entry; defaults to `http`. */
+  transport?: RemoteTransport;
+  /** How a remote entry authenticates; `oauth` drives the one-click browser login. */
+  auth?: RemoteAuth;
+  /** Pre-registered OAuth client id, for providers without dynamic registration. */
+  clientId?: string;
+  /** Optional OAuth scope to request. */
+  scope?: string;
   /** Names of env/secret keys the server needs (prompted on add). */
   requires?: string[];
   homepage?: string;
