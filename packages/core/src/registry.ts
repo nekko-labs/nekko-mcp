@@ -25,9 +25,10 @@ export const REGISTRY: RegistryEntry[] = [
     url: 'https://api.githubcopilot.com/mcp/',
     transport: 'http',
     auth: 'oauth',
-    // GitHub's OAuth server has no dynamic client registration, so it needs a
-    // pre-registered app id. Set NEKKO_MCP_CLIENTID_GITHUB (or the entry's clientId).
-    note: 'Needs a registered GitHub OAuth app id (set NEKKO_MCP_CLIENTID_GITHUB) — GitHub has no automatic app registration.',
+    // GitHub has no dynamic client registration and requires client auth at the
+    // token endpoint even with PKCE, so it needs a pre-registered app id + secret:
+    // set NEKKO_MCP_CLIENTID_GITHUB and NEKKO_MCP_CLIENTSECRET_GITHUB.
+    note: 'Needs a registered GitHub OAuth app (set NEKKO_MCP_CLIENTID_GITHUB + NEKKO_MCP_CLIENTSECRET_GITHUB) — GitHub has no automatic app registration.',
     homepage: 'https://github.com/github/github-mcp-server',
   },
   {

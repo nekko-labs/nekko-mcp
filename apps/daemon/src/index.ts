@@ -135,18 +135,23 @@ const fileStore = (id: string): OAuthStore => ({
   },
 });
 /**
- * A pre-registered OAuth client id for a provider that lacks dynamic registration
- * (e.g. GitHub). Resolved from the server config, or from an env var so it can be
- * set without a rebuild: `NEKKO_MCP_CLIENTID_GITHUB=Iv1...`.
+ * Pre-registered OAuth credentials for a provider that lacks dynamic registration
+ * (e.g. GitHub). Resolved from the server config, or from env so they can be set
+ * without a rebuild and kept out of the repo/catalog:
+ *   NEKKO_MCP_CLIENTID_GITHUB=Iv1...   NEKKO_MCP_CLIENTSECRET_GITHUB=...
+ * The secret is only needed by servers that require client auth at the token
+ * endpoint even with PKCE; DCR providers (Context7) need neither.
  */
-const clientIdEnv = (id: string): string | undefined =>
-  process.env[`NEKKO_MCP_CLIENTID_${id.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`];
-const resolvedClientId = (cfg: ManagedServerConfig): string | undefined => cfg.clientId || clientIdEnv(cfg.id);
+const envKey = (prefix: string, id: string): string | undefined =>
+  process.env[`${prefix}_${id.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`];
+const resolvedClientId = (cfg: ManagedServerConfig): string | undefined => cfg.clientId || envKey('NEKKO_MCP_CLIENTID', cfg.id);
+const resolvedClientSecret = (cfg: ManagedServerConfig): string | undefined => cfg.clientSecret || envKey('NEKKO_MCP_CLIENTSECRET', cfg.id);
 const makeProvider = (cfg: ManagedServerConfig): NekkoOAuthProvider =>
   new NekkoOAuthProvider(fileStore(cfg.id), {
     redirectUrl: OAUTH_REDIRECT,
     clientName: 'NekkoMCP',
     clientId: resolvedClientId(cfg),
+    clientSecret: resolvedClientSecret(cfg),
     scope: cfg.scope,
   });
 /** A remote server that uses OAuth and has no usable token yet needs the user to sign in. */
@@ -198,9 +203,10 @@ const runOAuth = async (
     return { authorized: false, authUrl: provider.lastAuthorizationUrl() };
   } catch (e) {
     let msg = e instanceof Error ? e.message : String(e);
-    // The common gotcha: the provider needs a pre-registered client id.
+    // The common gotcha: the provider needs a pre-registered app (id [+ secret]).
+    const ID = cfg.id.toUpperCase().replace(/[^A-Z0-9]/g, '_');
     if (/dynamic client registration/i.test(msg) && !resolvedClientId(cfg))
-      msg = `${cfg.name} doesn't support automatic app registration — it needs a pre-registered OAuth client id. Register an app (callback ${OAUTH_REDIRECT}) and set NEKKO_MCP_CLIENTID_${cfg.id.toUpperCase().replace(/[^A-Z0-9]/g, '_')}.`;
+      msg = `${cfg.name} doesn't support automatic app registration — it needs a pre-registered OAuth app. Register one (callback ${OAUTH_REDIRECT}) and set NEKKO_MCP_CLIENTID_${ID} (and NEKKO_MCP_CLIENTSECRET_${ID} if the provider requires a secret, e.g. GitHub).`;
     return { authorized: false, error: msg };
   }
 };

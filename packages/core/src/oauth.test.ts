@@ -51,6 +51,25 @@ describe('NekkoOAuthProvider', () => {
     expect(p.lastAuthorizationUrl()).toContain('auth.example.com');
   });
 
+  it('static clientId short-circuits DCR as a public client (no secret)', () => {
+    const p = new NekkoOAuthProvider(new MemoryOAuthStore(), { redirectUrl: REDIRECT, clientId: 'Iv1.abc' });
+    const info = p.clientInformation();
+    expect(info?.client_id).toBe('Iv1.abc');
+    expect((info as { client_secret?: string }).client_secret).toBeUndefined();
+    expect(p.clientMetadata.token_endpoint_auth_method).toBe('none');
+  });
+
+  it('static clientId + clientSecret authenticates as a confidential client (GitHub)', () => {
+    const p = new NekkoOAuthProvider(new MemoryOAuthStore(), {
+      redirectUrl: REDIRECT, clientId: 'Iv1.abc', clientSecret: 'sec-xyz',
+    });
+    const info = p.clientInformation();
+    expect(info?.client_id).toBe('Iv1.abc');
+    expect((info as { client_secret?: string }).client_secret).toBe('sec-xyz');
+    // Drives the SDK to send client auth at the token endpoint (client_secret_post).
+    expect(p.clientMetadata.token_endpoint_auth_method).toBe('client_secret_post');
+  });
+
   it('throws if asked for a verifier before one was saved', () => {
     const p = new NekkoOAuthProvider(new MemoryOAuthStore(), { redirectUrl: REDIRECT });
     expect(() => p.codeVerifier()).toThrow();

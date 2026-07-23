@@ -53,6 +53,13 @@ export interface NekkoOAuthProviderOpts {
    * OAuth server doesn't support RFC 7591 registration.
    */
   clientId?: string;
+  /**
+   * Pre-registered client secret, for providers that require client authentication
+   * at the token endpoint even with PKCE (e.g. GitHub). When present, the SDK picks
+   * `client_secret_post`/`client_secret_basic` from the server's advertised methods;
+   * when absent, the flow stays a pure public client (PKCE only).
+   */
+  clientSecret?: string;
   /** Called with the authorization URL when the flow needs the user's browser. */
   onRedirect?: (url: URL) => void;
 }
@@ -84,16 +91,20 @@ export class NekkoOAuthProvider implements OAuthClientProvider {
       redirect_uris: [this.opts.redirectUrl],
       grant_types: ['authorization_code', 'refresh_token'],
       response_types: ['code'],
-      // Public client (no secret): PKCE is the protection. Most MCP servers
-      // register public clients; those that mint a secret still round-trip fine.
-      token_endpoint_auth_method: 'none',
+      // Public client by default (PKCE is the protection). When a secret is
+      // configured we register/authenticate as a confidential client instead —
+      // some servers (GitHub) require client auth at the token endpoint even
+      // with PKCE, since they don't treat native apps as public clients.
+      token_endpoint_auth_method: this.opts.clientSecret ? 'client_secret_post' : 'none',
       ...(this.opts.scope ? { scope: this.opts.scope } : {}),
     };
   }
 
   clientInformation(): OAuthClientInformation | OAuthClientInformationFull | undefined {
     // A configured static client id short-circuits dynamic registration.
-    if (this.opts.clientId) return { client_id: this.opts.clientId };
+    // Including the secret makes the SDK authenticate the token request.
+    if (this.opts.clientId)
+      return { client_id: this.opts.clientId, ...(this.opts.clientSecret ? { client_secret: this.opts.clientSecret } : {}) };
     return this.read<OAuthClientInformationFull>(K_CLIENT);
   }
   saveClientInformation(info: OAuthClientInformation | OAuthClientInformationFull): void {

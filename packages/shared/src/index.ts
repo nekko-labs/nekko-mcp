@@ -58,6 +58,13 @@ export interface ManagedServerConfig {
    * OAuth flow skips registration and uses this id. Left empty for DCR providers.
    */
   clientId?: string;
+  /**
+   * Pre-registered OAuth client secret, for providers that require one at the token
+   * endpoint even with PKCE (e.g. GitHub, which doesn't treat native apps as public
+   * clients). Shipped baked-in for a shared app, so not truly confidential — PKCE +
+   * the loopback callback secure the flow. Prefer supplying it via env, not config.
+   */
+  clientSecret?: string;
   /** Optional OAuth scope to request (space-delimited), when the provider needs it. */
   scope?: string;
   /** Whether the supervisor should run it. */
